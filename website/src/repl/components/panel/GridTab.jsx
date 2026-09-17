@@ -14,7 +14,10 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
+  EyeIcon,
+  EyeSlashIcon,
   FolderOpenIcon,
+  MinusIcon,
   PlayIcon,
   PlusIcon,
   SpeakerWaveIcon,
@@ -56,7 +59,7 @@ const TAB_MIME = 'application/x-strudel-pattern-id';
 // "several tracks at once" works with a single shared scheduler. Silence
 // when nothing is active so stopping/emptying the grid actually goes
 // quiet rather than leaving the last buffer sounding.
-function buildCombinedCode(tracks, activeIndexes, userPatterns) {
+function buildCombinedCode(tracks, activeIndexes, userPatterns, visualize) {
   const codes = tracks
     .map((t) => {
       if (t.muted) return null;
@@ -67,7 +70,18 @@ function buildCombinedCode(tracks, activeIndexes, userPatterns) {
       return userPatterns[entry.patternId]?.code;
     })
     .filter(Boolean);
-  return codes.length > 0 ? codes.join('\n\n') : 'silence';
+  if (codes.length === 0) return 'silence';
+  // `all(pianoroll)` is Strudel's own documented way to paint a pianoroll
+  // for every currently-running top-level pattern at once (see
+  // packages/draw/pianoroll.mjs's own doc comment) -- appended as its
+  // *own* top-level line in this ephemeral combined buffer, never written
+  // into any track's actual pattern code. That matters: rewriting a
+  // pattern's own code string to bolt a method onto the end is exactly
+  // the kind of fragile text-mutation this codebase specifically moved
+  // away from (see patternTitles.mjs's header comment) -- it can land in
+  // the wrong place, or silently do nothing, on any pattern with more
+  // than one top-level `$:` block. `all(...)` sidesteps that entirely.
+  return visualize ? `${codes.join('\n\n')}\n\nall(pianoroll)` : codes.join('\n\n');
 }
 
 // Scans forward from startIndex for the next enabled entry, wrapping once
@@ -103,6 +117,81 @@ function DropGap({ active, grow, onDragOver, onDrop }) {
   );
 }
 
+// Live tempo control: nudge cps up/down in small fixed steps, or tap out
+// a beat to set it directly -- editing cps by retyping `setcps(...)` in
+// the code mid-performance breaks flow, so this calls the same
+// repl.setCps() that would do from buttons instead. cps is a plain
+// mutable number on the scheduler (see patternGrid.mjs's header comment,
+// same reasoning as armTrack's duration calc), not reactive, so this
+// polls it rather than subscribing to anything -- cheap, and picks up
+// tempo changes made from code too (e.g. a `setcps()` inside a pattern).
+const BEATS_PER_CYCLE = 4;
+const CPS_NUDGE_STEP = 0.01;
+const TAP_RESET_MS = 2000;
+const TAP_HISTORY = 6;
+
+function TempoControl({ context }) {
+  const [cps, setCpsDisplay] = useState(0.5);
+  const tapTimesRef = useRef([]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const live = context.editorRef?.current?.repl?.scheduler?.cps;
+      if (live != null) setCpsDisplay(live);
+    }, 250);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const applyCps = (next) => {
+    const clamped = Math.max(0.05, Math.min(10, next));
+    context.editorRef?.current?.repl?.setCps(clamped);
+    setCpsDisplay(clamped);
+  };
+
+  const nudge = (dir) => applyCps(cps + dir * CPS_NUDGE_STEP);
+
+  // Averages the gaps between however many recent taps still count as
+  // "the same tapping" (a pause longer than TAP_RESET_MS starts over,
+  // rather than one stray late tap dragging a whole new average off).
+  // The beats-per-cycle assumption below is the one place this has to
+  // guess -- see this component's own header comment.
+  const tap = () => {
+    const now = performance.now();
+    const recent = tapTimesRef.current.filter((t) => now - t < TAP_RESET_MS);
+    recent.push(now);
+    tapTimesRef.current = recent.slice(-TAP_HISTORY);
+    if (tapTimesRef.current.length < 2) return;
+    const gaps = tapTimesRef.current.slice(1).map((t, i) => t - tapTimesRef.current[i]);
+    const avgMs = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    applyCps(1000 / avgMs / BEATS_PER_CYCLE);
+  };
+
+  return (
+    <div className="flex items-center gap-1 shrink-0">
+      <button onClick={() => nudge(-1)} title="nudge tempo down" className="opacity-60 hover:opacity-100">
+        <MinusIcon className="w-3 h-3" />
+      </button>
+      <span
+        className="font-mono text-[11px] w-10 text-center tabular-nums"
+        title="cycles per second, live from the scheduler"
+      >
+        {cps.toFixed(2)}
+      </span>
+      <button onClick={() => nudge(1)} title="nudge tempo up" className="opacity-60 hover:opacity-100">
+        <PlusIcon className="w-3 h-3" />
+      </button>
+      <button
+        onClick={tap}
+        title={`tap the beat a few times to set tempo (assumes ${BEATS_PER_CYCLE} beats per cycle -- won't be exactly right for every pattern, check the readout)`}
+        className="text-[10px] px-1.5 py-0.5 rounded border border-muted opacity-70 hover:opacity-100"
+      >
+        tap
+      </button>
+    </div>
+  );
+}
+
 export function GridTab({ context }) {
   const { userPatterns } = useSettings();
   // Subscribed purely so this re-renders when a title changes elsewhere.
@@ -133,6 +222,24 @@ export function GridTab({ context }) {
   const timersRef = useRef({});
   const loopRef = useRef(loop);
   loopRef.current = loop;
+  // Whether to paint a pianoroll for the running sections (item 3: see
+  // buildCombinedCode's comment for why this is appended as a separate
+  // top-level line rather than mutating any pattern's own code). Mirrored
+  // into a ref for the same reason loop is -- armed timers' closures read
+  // the ref, not the state, so a toggle takes effect immediately rather
+  // than only once the in-flight timer happens to fire.
+  const [visualize, setVisualize] = useState(false);
+  const visualizeRef = useRef(visualize);
+  // Coalesces same-tick evaluateCombined() calls into one -- if several
+  // tracks advance (or a mute/enable/visualize toggle lands) in the same
+  // JS tick, this collapses them into a single re-evaluate instead of
+  // firing one hot-swap per change back-to-back. This is the one part of
+  // "sections glitch when they swap" that's safely fixable without a
+  // real audio-engine change -- it does NOT add actual audio crossfade
+  // between sections (that needs per-track gain envelopes, well beyond
+  // this session's scope); see patternGrid.mjs's header comment for the
+  // limitation this doesn't touch.
+  const evaluatePendingRef = useRef(false);
 
   useEffect(
     () => () => {
@@ -142,11 +249,20 @@ export function GridTab({ context }) {
   );
 
   const evaluateCombined = async () => {
-    const code = buildCombinedCode(getGridTracks(), activeIndexesRef.current, userPatterns);
+    const code = buildCombinedCode(getGridTracks(), activeIndexesRef.current, userPatterns, visualizeRef.current);
     const editor = context.editorRef?.current;
     if (!editor) return;
     editor.setCode(code);
     await editor.evaluate();
+  };
+
+  const scheduleEvaluate = () => {
+    if (evaluatePendingRef.current) return;
+    evaluatePendingRef.current = true;
+    Promise.resolve().then(() => {
+      evaluatePendingRef.current = false;
+      evaluateCombined();
+    });
   };
 
   const clearTrackTimer = (trackId) => {
@@ -188,7 +304,7 @@ export function GridTab({ context }) {
     const next = firstEnabledFrom(track.entries, fromIndex + 1, loopRef.current);
     activeIndexesRef.current = { ...activeIndexesRef.current, [trackId]: next };
     setActiveIndexes(activeIndexesRef.current);
-    evaluateCombined();
+    scheduleEvaluate();
     if (next != null) {
       armTrack(trackId, next);
     } else {
@@ -222,7 +338,7 @@ export function GridTab({ context }) {
   // immediately instead of waiting for the next section swap.
   const onToggleMute = (trackId) => {
     toggleMuteTrack(trackId);
-    if (playing) setTimeout(evaluateCombined, 0);
+    if (playing) scheduleEvaluate();
   };
 
   // Same idea for an individual entry's enabled state -- if it's the one
@@ -230,7 +346,18 @@ export function GridTab({ context }) {
   // waiting for the next natural advance.
   const onToggleEntryEnabled = (trackId, entryId) => {
     toggleEntryEnabled(trackId, entryId);
-    if (playing) setTimeout(evaluateCombined, 0);
+    if (playing) scheduleEvaluate();
+  };
+
+  // Sets both the ref (read by evaluateCombined/scheduleEvaluate right
+  // away) and the state (for the button's own re-render) -- state alone
+  // wouldn't be visible to this same click's scheduleEvaluate() call,
+  // since React doesn't commit it until after this handler returns.
+  const onToggleVisualize = () => {
+    const next = !visualizeRef.current;
+    visualizeRef.current = next;
+    setVisualize(next);
+    if (playing) scheduleEvaluate();
   };
 
   const addCurrentTo = (trackId) => {
@@ -371,6 +498,14 @@ export function GridTab({ context }) {
           <ArrowPathIcon className="w-4 h-4" />
         </button>
         <span className="text-xs uppercase tracking-wide opacity-50">grid</span>
+        <TempoControl context={context} />
+        <button
+          onClick={onToggleVisualize}
+          title={visualize ? 'stop painting a pianoroll for the running sections' : 'paint a pianoroll for the running sections'}
+          className={cx(visualize ? 'text-[#89ddff]' : 'opacity-40 hover:opacity-80')}
+        >
+          {visualize ? <EyeIcon className="w-4 h-4" /> : <EyeSlashIcon className="w-4 h-4" />}
+        </button>
         {TAURI && (
           <button
             onClick={openTrackFromFile}

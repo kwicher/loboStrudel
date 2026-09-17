@@ -19,7 +19,12 @@
 // the clock never resets or glitches. Because it's one shared buffer, a
 // section's own setcps()/samples() calls will affect the whole mix even
 // though only one track "owns" that moment -- there's still no audio
-// crossfade between sections, same honest limitation the old Set mode had.
+// crossfade between sections, same honest limitation the old Set mode
+// had. GridTab.jsx's scheduleEvaluate() coalesces multiple same-tick
+// re-evaluates into one (fewer redundant hot-swaps when several tracks
+// advance together) but that's a scheduling optimization, not a fix for
+// the lack of crossfade itself -- a real fix would need per-track gain
+// envelopes, i.e. an actual audio-engine change, not attempted here.
 import { atom, computed } from 'nanostores';
 import { useStore } from '@nanostores/react';
 import { nanoid } from 'nanoid';
