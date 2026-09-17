@@ -14,10 +14,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
-  EyeIcon,
-  EyeSlashIcon,
   FolderOpenIcon,
-  MinusIcon,
   PlayIcon,
   PlusIcon,
   SpeakerWaveIcon,
@@ -25,6 +22,8 @@ import {
   StopIcon,
   TrashIcon,
 } from '@heroicons/react/16/solid';
+import { GridToolsPanel } from './GridToolsPanel.jsx';
+import { ensureVisualizerHook } from '../../gridVisualizer.mjs';
 import cx from '@src/cx.mjs';
 import { useSettings } from '../../../settings.mjs';
 import { useViewingPatternData, userPattern } from '../../../user_pattern_utils.mjs';
@@ -71,17 +70,19 @@ function buildCombinedCode(tracks, activeIndexes, userPatterns, visualize) {
     })
     .filter(Boolean);
   if (codes.length === 0) return 'silence';
-  // `all(pianoroll)` is Strudel's own documented way to paint a pianoroll
-  // for every currently-running top-level pattern at once (see
-  // packages/draw/pianoroll.mjs's own doc comment) -- appended as its
-  // *own* top-level line in this ephemeral combined buffer, never written
-  // into any track's actual pattern code. That matters: rewriting a
-  // pattern's own code string to bolt a method onto the end is exactly
-  // the kind of fragile text-mutation this codebase specifically moved
-  // away from (see patternTitles.mjs's header comment) -- it can land in
-  // the wrong place, or silently do nothing, on any pattern with more
-  // than one top-level `$:` block. `all(...)` sidesteps that entirely.
-  return visualize ? `${codes.join('\n\n')}\n\nall(pianoroll)` : codes.join('\n\n');
+  // Feeds every currently-running top-level pattern's hap triggers to the
+  // separate 3D visualizer window (see gridVisualizer.mjs) instead of the
+  // old inline pianoroll -- appended as its *own* top-level line in this
+  // ephemeral combined buffer, never written into any track's actual
+  // pattern code, for the same non-destructive-editing reason documented
+  // throughout this codebase (see patternTitles.mjs's header comment).
+  // `dominant=false` is load-bearing here: Pattern.onTrigger's default
+  // (`dominant=true`) silences the pattern's real webaudio output whenever
+  // more than one trigger is registered -- passing false keeps this a
+  // pure side-effect tap that doesn't touch what you actually hear.
+  return visualize
+    ? `${codes.join('\n\n')}\n\nall(x => x.onTrigger((hap) => window.__strudelGridVisualizerHook?.(hap), false))`
+    : codes.join('\n\n');
 }
 
 // Scans forward from startIndex for the next enabled entry, wrapping once
@@ -117,81 +118,6 @@ function DropGap({ active, grow, onDragOver, onDrop }) {
   );
 }
 
-// Live tempo control: nudge cps up/down in small fixed steps, or tap out
-// a beat to set it directly -- editing cps by retyping `setcps(...)` in
-// the code mid-performance breaks flow, so this calls the same
-// repl.setCps() that would do from buttons instead. cps is a plain
-// mutable number on the scheduler (see patternGrid.mjs's header comment,
-// same reasoning as armTrack's duration calc), not reactive, so this
-// polls it rather than subscribing to anything -- cheap, and picks up
-// tempo changes made from code too (e.g. a `setcps()` inside a pattern).
-const BEATS_PER_CYCLE = 4;
-const CPS_NUDGE_STEP = 0.01;
-const TAP_RESET_MS = 2000;
-const TAP_HISTORY = 6;
-
-function TempoControl({ context }) {
-  const [cps, setCpsDisplay] = useState(0.5);
-  const tapTimesRef = useRef([]);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      const live = context.editorRef?.current?.repl?.scheduler?.cps;
-      if (live != null) setCpsDisplay(live);
-    }, 250);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const applyCps = (next) => {
-    const clamped = Math.max(0.05, Math.min(10, next));
-    context.editorRef?.current?.repl?.setCps(clamped);
-    setCpsDisplay(clamped);
-  };
-
-  const nudge = (dir) => applyCps(cps + dir * CPS_NUDGE_STEP);
-
-  // Averages the gaps between however many recent taps still count as
-  // "the same tapping" (a pause longer than TAP_RESET_MS starts over,
-  // rather than one stray late tap dragging a whole new average off).
-  // The beats-per-cycle assumption below is the one place this has to
-  // guess -- see this component's own header comment.
-  const tap = () => {
-    const now = performance.now();
-    const recent = tapTimesRef.current.filter((t) => now - t < TAP_RESET_MS);
-    recent.push(now);
-    tapTimesRef.current = recent.slice(-TAP_HISTORY);
-    if (tapTimesRef.current.length < 2) return;
-    const gaps = tapTimesRef.current.slice(1).map((t, i) => t - tapTimesRef.current[i]);
-    const avgMs = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-    applyCps(1000 / avgMs / BEATS_PER_CYCLE);
-  };
-
-  return (
-    <div className="flex items-center gap-1 shrink-0">
-      <button onClick={() => nudge(-1)} title="nudge tempo down" className="opacity-60 hover:opacity-100">
-        <MinusIcon className="w-3 h-3" />
-      </button>
-      <span
-        className="font-mono text-[11px] w-10 text-center tabular-nums"
-        title="cycles per second, live from the scheduler"
-      >
-        {cps.toFixed(2)}
-      </span>
-      <button onClick={() => nudge(1)} title="nudge tempo up" className="opacity-60 hover:opacity-100">
-        <PlusIcon className="w-3 h-3" />
-      </button>
-      <button
-        onClick={tap}
-        title={`tap the beat a few times to set tempo (assumes ${BEATS_PER_CYCLE} beats per cycle -- won't be exactly right for every pattern, check the readout)`}
-        className="text-[10px] px-1.5 py-0.5 rounded border border-muted opacity-70 hover:opacity-100"
-      >
-        tap
-      </button>
-    </div>
-  );
-}
-
 export function GridTab({ context }) {
   const { userPatterns } = useSettings();
   // Subscribed purely so this re-renders when a title changes elsewhere.
@@ -222,7 +148,7 @@ export function GridTab({ context }) {
   const timersRef = useRef({});
   const loopRef = useRef(loop);
   loopRef.current = loop;
-  // Whether to paint a pianoroll for the running sections (item 3: see
+  // Whether to feed hap triggers to the separate 3D visualizer window (see
   // buildCombinedCode's comment for why this is appended as a separate
   // top-level line rather than mutating any pattern's own code). Mirrored
   // into a ref for the same reason loop is -- armed timers' closures read
@@ -247,6 +173,15 @@ export function GridTab({ context }) {
     },
     [],
   );
+
+  // Installs window.__strudelGridVisualizerHook once, on mount, so it's
+  // ready the first time buildCombinedCode's onTrigger line runs -- a
+  // one-time global side effect, not tied to visualize/playing state (the
+  // hook itself is cheap to have installed; buildCombinedCode is what
+  // decides whether anything actually calls it).
+  useEffect(() => {
+    ensureVisualizerHook();
+  }, []);
 
   const evaluateCombined = async () => {
     const code = buildCombinedCode(getGridTracks(), activeIndexesRef.current, userPatterns, visualizeRef.current);
@@ -498,14 +433,7 @@ export function GridTab({ context }) {
           <ArrowPathIcon className="w-4 h-4" />
         </button>
         <span className="text-xs uppercase tracking-wide opacity-50">grid</span>
-        <TempoControl context={context} />
-        <button
-          onClick={onToggleVisualize}
-          title={visualize ? 'stop painting a pianoroll for the running sections' : 'paint a pianoroll for the running sections'}
-          className={cx(visualize ? 'text-[#89ddff]' : 'opacity-40 hover:opacity-80')}
-        >
-          {visualize ? <EyeIcon className="w-4 h-4" /> : <EyeSlashIcon className="w-4 h-4" />}
-        </button>
+        <GridToolsPanel context={context} visualizerOn={visualize} onToggleVisualizer={onToggleVisualize} />
         {TAURI && (
           <button
             onClick={openTrackFromFile}

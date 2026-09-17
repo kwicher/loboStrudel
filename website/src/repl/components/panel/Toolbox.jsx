@@ -90,47 +90,6 @@ function FilterSweepBuilder({ context }) {
   );
 }
 
-// A curated set of small randomized transformations -- same spirit as
-// the two builders above, but for chaos rather than a specific
-// technique: roll one, see it, insert it at the cursor. Deliberately
-// insert-at-cursor rather than auto-appending to the whole pattern --
-// appending blindly to the end of arbitrary code is exactly the kind of
-// fragile text-mutation this codebase moved away from (see
-// patternTitles.mjs's header comment for the bug that caused that), and
-// it would land in the wrong place, or do nothing useful, on any pattern
-// with more than one top-level `$:` block. This puts the same choice a
-// manual edit would require in your hands, just with the boilerplate
-// (and the randomized numbers) written for you.
-const MUTATIONS = [
-  () => `.degradeBy(${(0.1 + Math.random() * 0.3).toFixed(2)})`,
-  () => `.sometimesBy(${(0.2 + Math.random() * 0.3).toFixed(2)}, x => x.rev())`,
-  () => `.ply(${2 + Math.floor(Math.random() * 3)})`,
-  () => `.fast(${(1.25 + Math.random() * 0.75).toFixed(2)})`,
-  () => `.slow(${(1.25 + Math.random() * 0.75).toFixed(2)})`,
-  () => `.jux(rev)`,
-  () => `.chop(${2 + Math.floor(Math.random() * 6)})`,
-  () => `.often(x => x.ply(2))`,
-  () => `.rarely(x => x.chop(4))`,
-  () => `.iter(${2 + Math.floor(Math.random() * 3)})`,
-  () => `.linger(${(0.125 * (1 + Math.floor(Math.random() * 4))).toFixed(3)})`,
-];
-
-function MutateBuilder({ context }) {
-  const [snippet, setSnippet] = useState(() => MUTATIONS[Math.floor(Math.random() * MUTATIONS.length)]());
-  const reroll = () => setSnippet(MUTATIONS[Math.floor(Math.random() * MUTATIONS.length)]());
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between">
-        <div className="text-[10px] uppercase tracking-wide opacity-50">mutate</div>
-        <button onClick={reroll} title="roll a different one" className="text-[10px] opacity-60 hover:opacity-100">
-          reroll
-        </button>
-      </div>
-      <InsertRow snippet={snippet} onInsert={() => insertSnippet(context, snippet)} />
-    </div>
-  );
-}
-
 function EuclidBuilder({ context }) {
   const [k, setK] = useState(3);
   const [n, setN] = useState(8);
@@ -207,7 +166,7 @@ export function Toolbox({ context }) {
       <button
         ref={buttonRef}
         onClick={() => setOpen((v) => !v)}
-        title="toolbox: filter sweep, euclidean rhythm, and mutate snippet helpers"
+        title="toolbox: filter sweep and euclidean rhythm snippet helpers"
         className="px-2 hover:opacity-50"
       >
         <WrenchScrewdriverIcon className="w-4 h-4" />
@@ -232,8 +191,6 @@ export function Toolbox({ context }) {
             <FilterSweepBuilder context={context} />
             <div className="border-t border-muted" />
             <EuclidBuilder context={context} />
-            <div className="border-t border-muted" />
-            <MutateBuilder context={context} />
           </div>,
           document.body,
         )}

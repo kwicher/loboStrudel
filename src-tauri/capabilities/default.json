@@ -1,8 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for the main Strudel window: file dialogs, filesystem read/write under the user's home directory (samples + pattern files), and clipboard.",
-  "windows": ["main"],
+  "description": "Capabilities for the main Strudel window: file dialogs, filesystem read/write under the user's home directory (samples + pattern files), clipboard, and permission to open the separate grid-visualizer window and emit hap events to it.",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "dialog:default",
@@ -12,6 +14,8 @@
     "fs:allow-home-read-recursive",
     "fs:allow-home-write-recursive",
     "fs:allow-home-meta-recursive",
-    "clipboard-manager:allow-write-text"
+    "clipboard-manager:allow-write-text",
+    "core:webview:allow-create-webview-window",
+    "core:event:allow-emit"
   ]
 }
