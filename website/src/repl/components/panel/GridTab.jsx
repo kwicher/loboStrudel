@@ -27,7 +27,7 @@ import { GridToolsPanel } from './GridToolsPanel.jsx';
 import { ensureVisualizerHook, openVisualizerPopup } from '../../gridVisualizer.mjs';
 import cx from '@src/cx.mjs';
 import { useSettings } from '../../../settings.mjs';
-import { useViewingPatternData, userPattern } from '../../../user_pattern_utils.mjs';
+import { getViewingPatternData, useViewingPatternData, userPattern } from '../../../user_pattern_utils.mjs';
 import { patternTitle } from './PatternTabs.jsx';
 import { setTitleOverride, useTitleOverrides } from '../../patternTitles.mjs';
 import { openPatternTab } from '../../openPatternTabs.mjs';
@@ -44,9 +44,12 @@ import {
   removeFromTrack,
   removeTrack,
   setGridEvaluating,
+  setGridPlaying,
   setTrackEntryCycles,
   toggleEntryEnabled,
   toggleMuteTrack,
+  toggleToolsPopup,
+  useGridPlaying,
   useGridTracks,
 } from '../../patternGrid.mjs';
 
@@ -126,7 +129,9 @@ export function GridTab({ context }) {
   useTitleOverrides();
   const tracks = useGridTracks();
   const viewingPatternData = useViewingPatternData();
-  const [playing, setPlaying] = useState(false);
+  // Shared (patternGrid.mjs), not local -- see setGridPlaying's own
+  // comment for why the main app header needs to see this too.
+  const playing = useGridPlaying();
   const [loop, setLoop] = useState(false);
   const [activeIndexes, setActiveIndexes] = useState({});
   // Per-track { durationMs, animKey } for the currently-armed section --
@@ -158,10 +163,6 @@ export function GridTab({ context }) {
   // than only once the in-flight timer happens to fire.
   const [visualize, setVisualize] = useState(false);
   const visualizeRef = useRef(visualize);
-  // Whether the docked Grid tools side panel is open -- a proper column
-  // next to the track list (see GridToolsPanel.jsx's header comment for
-  // why this replaced a floating popover).
-  const [toolsOpen, setToolsOpen] = useState(false);
   // Coalesces same-tick evaluateCombined() calls into one -- if several
   // tracks advance (or a mute/enable/visualize toggle lands) in the same
   // JS tick, this collapses them into a single re-evaluate instead of
@@ -224,12 +225,38 @@ export function GridTab({ context }) {
     }
   };
 
-  const stopGrid = () => {
+  // Fully halts the grid: stops every track's timer, actually silences
+  // the scheduler (editor.stop() -- the old version only cleared JS
+  // timers and never touched the scheduler, so pressing "stop" mid-
+  // playback left whatever was last evaluated still sounding), and
+  // restores the editor's visible text back to whatever pattern the user
+  // is actually viewing instead of leaving the grid's last combined
+  // buffer (often literally "silence") sitting there. Called both from
+  // the Stop button and from advanceTrack when every track's queue runs
+  // out on its own (see allTracksInactive below) -- either way the grid
+  // has genuinely stopped, so the header transport should come back too.
+  const haltGrid = () => {
     Object.keys(timersRef.current).forEach(clearTrackTimer);
     activeIndexesRef.current = {};
     setActiveIndexes({});
     setSectionAnim({});
-    setPlaying(false);
+    setGridPlaying(false);
+    const editor = context.editorRef?.current;
+    if (editor) {
+      editor.stop();
+      editor.setCode(getViewingPatternData()?.code ?? '');
+    }
+  };
+  const stopGrid = haltGrid;
+
+  // True once every track has either run out (and isn't looping back) or
+  // has nothing enabled to play in the first place -- i.e. the grid
+  // legitimately has nothing left to do, as opposed to the user having
+  // pressed Stop.
+  const allTracksInactive = () => {
+    const tracksNow = getGridTracks();
+    if (tracksNow.length === 0) return true;
+    return tracksNow.every((t) => activeIndexesRef.current[t.id] == null);
   };
 
   // Arms this one track's advance timer. Independent of every other
@@ -256,15 +283,24 @@ export function GridTab({ context }) {
     const next = firstEnabledFrom(track.entries, fromIndex + 1, loopRef.current);
     activeIndexesRef.current = { ...activeIndexesRef.current, [trackId]: next };
     setActiveIndexes(activeIndexesRef.current);
-    scheduleEvaluate();
     if (next != null) {
       armTrack(trackId, next);
+      scheduleEvaluate();
     } else {
       setSectionAnim((prev) => {
         const next = { ...prev };
         delete next[trackId];
         return next;
       });
+      // This track just ran out. If every other track has too (or was
+      // never playing to begin with), the grid is genuinely done --
+      // fully halt rather than silently evaluating "silence" and
+      // leaving the header transport disabled for no reason.
+      if (allTracksInactive()) {
+        haltGrid();
+      } else {
+        scheduleEvaluate();
+      }
     }
   };
 
@@ -277,7 +313,7 @@ export function GridTab({ context }) {
     });
     activeIndexesRef.current = starting;
     setActiveIndexes(starting);
-    setPlaying(true);
+    setGridPlaying(true);
     evaluateCombined();
     tracksNow.forEach((t) => {
       if (starting[t.id] != null) armTrack(t.id, starting[t.id]);
@@ -432,11 +468,7 @@ export function GridTab({ context }) {
   };
 
   return (
-    <div className="flex h-full overflow-hidden">
-      <div
-        className="p-2 flex flex-col gap-3 text-sm grow min-w-0 overflow-auto"
-        onDragLeave={() => setDropTarget(null)}
-      >
+    <div className="p-2 flex flex-col gap-3 text-sm h-full overflow-auto" onDragLeave={() => setDropTarget(null)}>
       <div className="flex items-center gap-2 shrink-0">
         <button
           onClick={playing ? stopGrid : playGrid}
@@ -455,9 +487,9 @@ export function GridTab({ context }) {
         </button>
         <span className="text-xs uppercase tracking-wide opacity-50">grid</span>
         <button
-          onClick={() => setToolsOpen((v) => !v)}
+          onClick={toggleToolsPopup}
           title="grid tools: tempo, mutate, filter sweep, euclidean rhythm, and the visualizer"
-          className={cx('px-1', toolsOpen ? 'opacity-100 text-[#89ddff]' : 'opacity-60 hover:opacity-90')}
+          className="px-1 opacity-60 hover:opacity-90"
         >
           <AdjustmentsHorizontalIcon className="w-4 h-4" />
         </button>
@@ -633,16 +665,15 @@ export function GridTab({ context }) {
           drag a pattern tab here to start a new track
         </div>
       )}
-      </div>
-      {toolsOpen && (
-        <GridToolsPanel
-          context={context}
-          onClose={() => setToolsOpen(false)}
-          visualizerOn={visualize}
-          onToggleVisualizer={onToggleVisualize}
-          onOpenVisualizer={openVisualizerPopup}
-        />
-      )}
+      {/* Self-gates on the shared open flag and portals itself to
+          document.body -- always safe to render, renders nothing while
+          closed. See GridToolsPanel.jsx's header comment. */}
+      <GridToolsPanel
+        context={context}
+        visualizerOn={visualize}
+        onToggleVisualizer={onToggleVisualize}
+        onOpenVisualizer={openVisualizerPopup}
+      />
     </div>
   );
 }

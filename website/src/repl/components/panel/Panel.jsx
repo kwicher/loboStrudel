@@ -6,6 +6,7 @@ import { LevelMeter } from './LevelMeter';
 import cx from '@src/cx.mjs';
 import { StrudelIcon } from '@src/repl/components/icons/StrudelIcon';
 import { useSettings, setIsZen, setIsPanelOpened } from '../../../settings.mjs';
+import { useGridPlaying } from '../../patternGrid.mjs';
 import '../../Repl.css';
 import { useLogger } from '../useLogger';
 import { ConsoleTab } from './ConsoleTab';
@@ -204,16 +205,29 @@ function TempoControl({ context }) {
 function MainMenu({ context, isEmbedded = false, className }) {
   const { started, pending, isDirty, activeCode, handleTogglePlay, handleEvaluate, handleShare, handlePanic } = context;
   const { isCSSAnimationDisabled } = useSettings();
+  // The grid and the main single-pattern transport share one editor and
+  // scheduler (see patternGrid.mjs's header comment) -- letting both
+  // drive it at once is exactly the "playback gets mixed up" confusion
+  // that was reported. While the grid is playing, play/stop and update
+  // go inert; per explicit request, playback is then "fully controlled
+  // via grid tools." Panic and tempo stay live -- panic should always be
+  // able to silence everything in an emergency, and tempo is genuinely
+  // shared (the grid's own tempo control does the same setCps() call).
+  const gridPlaying = useGridPlaying();
   return (
     <div className={cx('flex text-sm max-w-full shrink-0 overflow-hidden text-foreground px-2 h-10', className)}>
       <button
         onClick={handleTogglePlay}
-        title={started ? 'stop' : 'play'}
-        className={cx('px-2 hover:opacity-50', !started && !isCSSAnimationDisabled && 'animate-pulse')}
+        disabled={gridPlaying}
+        title={gridPlaying ? 'the grid is controlling playback -- stop the grid to use this' : started ? 'stop' : 'play'}
+        className={cx(
+          'px-2',
+          gridPlaying ? 'opacity-30 cursor-default' : cx('hover:opacity-50', !started && !isCSSAnimationDisabled && 'animate-pulse'),
+        )}
       >
         <span className={cx('flex items-center space-x-2')}>
           {started ? <StopIcon className="w-5 h-5" /> : <PlayIcon className="w-5 h-5" />}
-          {!isEmbedded && <span>{pending ? '...' : started ? 'stop' : 'play'}</span>}
+          {!isEmbedded && <span>{gridPlaying ? 'grid' : pending ? '...' : started ? 'stop' : 'play'}</span>}
         </span>
       </button>
       {!isEmbedded && <LevelMeter context={context} />}
@@ -228,8 +242,12 @@ function MainMenu({ context, isEmbedded = false, className }) {
       )}
       <button
         onClick={handleEvaluate}
-        title="update"
-        className={cx('flex items-center space-x-1 px-2', !isDirty || !activeCode ? 'opacity-50' : 'hover:opacity-50')}
+        disabled={gridPlaying}
+        title={gridPlaying ? 'the grid is controlling playback -- stop the grid to use this' : 'update'}
+        className={cx(
+          'flex items-center space-x-1 px-2',
+          gridPlaying ? 'opacity-30 cursor-default' : !isDirty || !activeCode ? 'opacity-50' : 'hover:opacity-50',
+        )}
       >
         {!isEmbedded && <span>update</span>}
       </button>

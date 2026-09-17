@@ -247,6 +247,32 @@ export function isGridEvaluating() {
   return gridEvaluating;
 }
 
+// Whether the grid is actively playing -- shared (not local to GridTab)
+// so the main app header (Panel.jsx) can disable its own play/stop/update
+// transport while the grid owns playback. The two used to be able to run
+// at once and fight over the same shared editor/scheduler (see this
+// file's header comment for why there's only one); per explicit request
+// ("the main playback loop... should be inactivated... fully controlled
+// via grid tools") the header transport now just goes inert instead. A
+// plain in-memory atom, not sessionStorage-backed -- there's no reason
+// "was the grid playing" should survive a reload, unlike the panel-open
+// toggles above.
+const $gridPlaying = atom(false);
+export const useGridPlaying = () => useStore($gridPlaying);
+export const setGridPlaying = (value) => $gridPlaying.set(value);
+
+// Whether the floating Grid tools popup (tempo, mutate, filter sweep,
+// euclid, visualizer controls -- see GridToolsPopup.jsx) is open. Kept
+// here rather than local to GridTab so it's mounted once at the
+// ReplEditor level and survives the Grid panel itself being closed and
+// reopened, the same reasoning as the visualizer popup's own open flag
+// (gridVisualizer.mjs's useVisualizerPopupOpen).
+const $toolsPopupOpen = atom(false);
+export const useToolsPopupOpen = () => useStore($toolsPopupOpen);
+export const openToolsPopup = () => $toolsPopupOpen.set(true);
+export const closeToolsPopup = () => $toolsPopupOpen.set(false);
+export const toggleToolsPopup = () => $toolsPopupOpen.set(!$toolsPopupOpen.get());
+
 // Whether the grid is docked open below the code editor. Deliberately its
 // own toggle rather than routing through the app's generic panel system
 // (activeFooter/isPanelOpen, Panel.jsx) -- that system only offers "narrow

@@ -12,9 +12,10 @@
 // now, not a portal popover (GridTab.jsx renders it directly in a flex
 // row next to the track list; no createPortal, no anchor-position math).
 import { useEffect, useRef, useState } from 'react';
-import { XMarkIcon } from '@heroicons/react/16/solid';
 import cx from '@src/cx.mjs';
 import { setVisualizerSetting, useVisualizerSettings } from '../../gridVisualizer.mjs';
+import { closeToolsPopup, useToolsPopupOpen } from '../../patternGrid.mjs';
+import { FloatingPopup } from './FloatingPopup.jsx';
 
 function insertSnippet(context, snippet) {
   const editor = context.editorRef?.current;
@@ -228,6 +229,11 @@ const PALETTES = [
   { value: 'fire', label: 'fire' },
 ];
 
+const STYLES = [
+  { value: '3d', label: '3D particles' },
+  { value: '2d', label: '2D lines (lighter)' },
+];
+
 // The visualizer replaced the old inline pianoroll toggle: "feeding"
 // controls whether the combined buffer emits hap events at all (cheap to
 // leave off when the popup isn't open), "open" opens the movable
@@ -239,6 +245,7 @@ const PALETTES = [
 // partly customized live" part of the request.
 function VisualizerControls({ visualizerOn, onToggleVisualizer, onOpenVisualizer }) {
   const settings = useVisualizerSettings();
+  const is3d = settings.style !== '2d';
   return (
     <div className="flex flex-col gap-1.5">
       <div className="text-[10px] uppercase tracking-wide opacity-50">visualizer</div>
@@ -262,6 +269,20 @@ function VisualizerControls({ visualizerOn, onToggleVisualizer, onOpenVisualizer
         </button>
       </div>
       <label className="flex items-center gap-2 text-[10px]">
+        <span className="opacity-60 w-12 shrink-0">style</span>
+        <select
+          value={settings.style}
+          onChange={(e) => setVisualizerSetting('style', e.target.value)}
+          className="flex-1 bg-background text-foreground border border-muted rounded px-1 py-0.5 outline-none"
+        >
+          {STYLES.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex items-center gap-2 text-[10px]">
         <span className="opacity-60 w-12 shrink-0">palette</span>
         <select
           value={settings.palette}
@@ -276,7 +297,7 @@ function VisualizerControls({ visualizerOn, onToggleVisualizer, onOpenVisualizer
         </select>
       </label>
       <label className="flex items-center gap-2 text-[10px]">
-        <span className="opacity-60 w-12 shrink-0">burst</span>
+        <span className="opacity-60 w-12 shrink-0">{is3d ? 'burst' : 'boost'}</span>
         <input
           type="range"
           min={0.3}
@@ -287,32 +308,62 @@ function VisualizerControls({ visualizerOn, onToggleVisualizer, onOpenVisualizer
           className="flex-1"
         />
       </label>
-      <label className="flex items-center gap-2 text-[10px]">
-        <span className="opacity-60 w-12 shrink-0">bloom</span>
-        <input
-          type="range"
-          min={0}
-          max={2.5}
-          step={0.1}
-          value={settings.bloom}
-          onChange={(e) => setVisualizerSetting('bloom', Number(e.target.value))}
-          className="flex-1"
-        />
-      </label>
+      {is3d && (
+        <>
+          <label className="flex items-center gap-2 text-[10px]">
+            <span className="opacity-60 w-12 shrink-0">bloom</span>
+            <input
+              type="range"
+              min={0}
+              max={2.5}
+              step={0.1}
+              value={settings.bloom}
+              onChange={(e) => setVisualizerSetting('bloom', Number(e.target.value))}
+              className="flex-1"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-[10px]" title="background particle count -- the main cost knob for the 3D style">
+            <span className="opacity-60 w-12 shrink-0">spots</span>
+            <input
+              type="range"
+              min={0}
+              max={800}
+              step={50}
+              value={settings.ambientCount}
+              onChange={(e) => setVisualizerSetting('ambientCount', Number(e.target.value))}
+              className="flex-1"
+            />
+            <span className="w-8 text-right opacity-50 tabular-nums">{settings.ambientCount}</span>
+          </label>
+        </>
+      )}
     </div>
   );
 }
 
-export function GridToolsPanel({ context, onClose, visualizerOn, onToggleVisualizer, onOpenVisualizer }) {
+const SIZE = { width: 300, height: 640 };
+
+// Floating popup, not a docked column -- it used to be squeezed into a
+// narrow column inside GridTab that needed inner scrolling to see
+// everything; per explicit request ("cramped in the corner and require
+// scrolling... should also be a floating pop-up DIV") it's now sized
+// generously enough that its five sections fit without scrolling on a
+// normal-height window, with overflow-auto (from FloatingPopup) as a
+// fallback rather than the default. Self-gates on the shared open flag
+// (patternGrid.mjs) so GridTab can render it unconditionally -- it
+// returns null when closed, same pattern as GridVisualizerPopup.jsx.
+export function GridToolsPanel({ context, visualizerOn, onToggleVisualizer, onOpenVisualizer }) {
+  const open = useToolsPopupOpen();
+  if (!open) return null;
   return (
-    <div className="w-64 shrink-0 border-l border-muted flex flex-col overflow-hidden">
-      <div className="flex items-center justify-between px-2 h-6 min-h-6 border-b border-muted shrink-0">
-        <span className="text-[10px] uppercase tracking-wide opacity-50">grid tools</span>
-        <button onClick={onClose} title="close grid tools">
-          <XMarkIcon className="w-3.5 h-3.5 opacity-50 hover:opacity-100" />
-        </button>
-      </div>
-      <div className="flex flex-col gap-3 p-2 overflow-y-auto">
+    <FloatingPopup
+      title="grid tools"
+      onClose={closeToolsPopup}
+      width={SIZE.width}
+      height={SIZE.height}
+      defaultPosition={() => ({ left: 32, top: Math.max(16, window.innerHeight - SIZE.height - 96) })}
+    >
+      <div className="flex flex-col gap-3 p-2">
         <TempoControl context={context} />
         <div className="border-t border-muted" />
         <MutateBuilder context={context} />
@@ -323,6 +374,6 @@ export function GridToolsPanel({ context, onClose, visualizerOn, onToggleVisuali
         <div className="border-t border-muted" />
         <VisualizerControls visualizerOn={visualizerOn} onToggleVisualizer={onToggleVisualizer} onOpenVisualizer={onOpenVisualizer} />
       </div>
-    </div>
+    </FloatingPopup>
   );
 }

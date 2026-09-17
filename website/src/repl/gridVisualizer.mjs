@@ -74,9 +74,14 @@ export const toggleVisualizerPopup = () => $popupOpen.set(!$popupOpen.get());
 // the bloom slider takes effect on the running scene immediately rather
 // than needing the popup reopened.
 const DEFAULT_VISUALIZER_SETTINGS = {
+  style: '3d', // '3d' (particle burst scene) | '2d' (lightweight radial line scope)
   palette: 'spectrum', // 'spectrum' | 'mono' | 'fire'
-  intensity: 1, // burst size/particle-count multiplier
-  bloom: 1.2, // post-processing bloom strength
+  intensity: 1, // burst size / boost-strength multiplier
+  bloom: 1.2, // post-processing bloom strength (3d style only)
+  ambientCount: 400, // background particle count (3d style only) -- the
+  // heaviest knob for perf, since the WebGL/particle/bloom stack ('3d')
+  // is meaningfully more computationally demanding than '2d', which is
+  // plain canvas 2D and has no ambient field of its own.
 };
 const $visualizerSettings = atom(DEFAULT_VISUALIZER_SETTINGS);
 export const useVisualizerSettings = () => useStore($visualizerSettings);

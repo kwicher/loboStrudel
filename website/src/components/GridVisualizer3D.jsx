@@ -1,24 +1,33 @@
-// The Grid's audio-reactive visual: a glowing particle field that bursts
-// outward on every hap trigger, rendered with additive-blended soft-round
-// sprites and a bloom post-process pass for the "colorful and 3D" look
-// requested (and, on a follow-up pass, "make it more appealing" after the
-// first version -- a single rotating icosahedron with a few bursts around
-// it -- came across as "just some ball").
+// The Grid's audio-reactive 3D visual: a glowing particle field that
+// bursts outward on every hap trigger, rendered with additive-blended
+// soft-round sprites and a bloom post-process pass for the "colorful and
+// 3D" look requested (and, on a follow-up pass, "make it more appealing"
+// after the first version -- a single rotating icosahedron with a few
+// bursts around it -- came across as "just some ball"). See
+// GridVisualizer2D.jsx for the lighter-weight alternative style
+// ("visualization is computationally heavy... additional option" of a
+// 2D line animation) -- GridVisualizerScene.jsx picks between the two.
 //
 // Technique-wise this borrows the common audio-reactive-particle recipe
 // (see e.g. Codrops' "Audio-Reactive Visuals with Dynamic Particles in
-// Three.js" and the various Three.js particle-audio demos): one
-// THREE.Points cloud, vertexColors + AdditiveBlending + a soft circular
-// sprite texture for glow, frequency/pitch-mapped color, and an
-// UnrealBloomPass composited on top. The one real difference from most of
-// those write-ups: they drive particles from a continuous Web Audio FFT
-// (bass/mid/treble energy every frame). Strudel's Grid only gives us
-// discrete hap trigger events (one per note/sample fired, via
-// Pattern#onTrigger -- see gridVisualizer.mjs), so instead of sampling a
-// spectrum this treats each hap like a firework shell: it "explodes" a
-// batch of particles from a pitch-mapped origin on a ring, which then fly
-// out ballistically and fade -- plus a slow, continuous ambient field so
-// the scene isn't dead between triggers.
+// Three.js" and the various Three.js particle-audio demos): additive
+// blending + a soft circular sprite texture for glow, frequency/pitch-
+// mapped color, and an UnrealBloomPass composited on top. The one real
+// difference from most of those write-ups: they drive particles from a
+// continuous Web Audio FFT (bass/mid/treble energy every frame).
+// Strudel's Grid only gives us discrete hap trigger events (one per
+// note/sample fired, via Pattern#onTrigger -- see gridVisualizer.mjs),
+// so instead of sampling a spectrum this treats each hap like a firework
+// shell: it "explodes" a batch of particles from a pitch-mapped origin
+// on a ring, which then fly out ballistically and fade -- plus a slow,
+// continuous ambient field so the scene isn't dead between triggers.
+//
+// Ambient and burst particles are two SEPARATE THREE.Points objects (two
+// draw calls instead of one shared pool) specifically so the "background
+// spots" count control has a real effect: the ambient geometry's draw
+// range is set to the live count each frame, and its per-frame update
+// loop only iterates that many entries -- turning the slider down
+// actually skips the work, not just hides the result.
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -27,8 +36,8 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { subscribeHaps, useVisualizerSettings } from '../repl/gridVisualizer.mjs';
 
-const MAX_PARTICLES = 4000;
-const AMBIENT_COUNT = 500;
+const BURST_CAP = 3000;
+const AMBIENT_CAP = 800; // hard upper bound the "background spots" slider can reach
 
 function hashString(str) {
   let h = 0;
@@ -108,57 +117,65 @@ export default function GridVisualizer3D() {
     composer.addPass(new OutputPass());
 
     const sprite = makeSpriteTexture();
+    const rand = (a, b) => a + Math.random() * (b - a);
 
-    // One shared particle pool, ambient particles first (a slow, dim
-    // field that's always drifting) then burst particles (spawned and
-    // recycled round-robin as haps arrive) -- one geometry/material/draw
-    // call for everything, since THREE.Points doesn't need per-particle
-    // objects the way individual meshes would.
-    const positions = new Float32Array(MAX_PARTICLES * 3);
+    // --- Ambient field: a slow, dim, always-drifting background. Its
+    // draw range and update-loop bound both track the live "background
+    // spots" setting, read fresh every frame. ---
+    const ambientPositions = new Float32Array(AMBIENT_CAP * 3);
+    const ambientColor = new Float32Array(AMBIENT_CAP * 3);
+    const ambientVelocity = new Float32Array(AMBIENT_CAP * 3);
+    for (let i = 0; i < AMBIENT_CAP; i++) {
+      const r = rand(2.5, 5.5);
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(rand(-1, 1));
+      ambientPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      ambientPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      ambientPositions[i * 3 + 2] = r * Math.cos(phi);
+      const c = paletteColor('mono', 0, 0);
+      ambientColor[i * 3] = c.r * 0.35;
+      ambientColor[i * 3 + 1] = c.g * 0.35;
+      ambientColor[i * 3 + 2] = c.b * 0.35;
+      ambientVelocity[i * 3] = rand(-0.05, 0.05);
+      ambientVelocity[i * 3 + 1] = rand(-0.05, 0.05);
+      ambientVelocity[i * 3 + 2] = rand(-0.05, 0.05);
+    }
+    const ambientGeometry = new THREE.BufferGeometry();
+    ambientGeometry.setAttribute('position', new THREE.BufferAttribute(ambientPositions, 3));
+    ambientGeometry.setAttribute('color', new THREE.BufferAttribute(ambientColor, 3));
+    const ambientMaterial = new THREE.PointsMaterial({
+      size: 3.5,
+      map: sprite,
+      vertexColors: true,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    });
+    const ambientPoints = new THREE.Points(ambientGeometry, ambientMaterial);
+    scene.add(ambientPoints);
+
+    // --- Burst pool: spawned and recycled round-robin as haps arrive. ---
+    const burstPositions = new Float32Array(BURST_CAP * 3);
     // Two color buffers on purpose: spawnColor is each particle's fixed
     // full-brightness color (read every frame to compute the fade), and
     // displayColor is the one actually bound to the geometry attribute
     // (spawnColor scaled by remaining life). Using a single shared array
     // for both would mean writing this frame's faded value clobbers the
     // full-brightness value the next frame's fade needs to read from.
-    const spawnColor = new Float32Array(MAX_PARTICLES * 3);
-    const displayColor = new Float32Array(MAX_PARTICLES * 3);
-    const sizes = new Float32Array(MAX_PARTICLES);
-    const velocities = new Float32Array(MAX_PARTICLES * 3);
-    const life = new Float32Array(MAX_PARTICLES); // remaining life in seconds, Infinity for ambient
-    const maxLife = new Float32Array(MAX_PARTICLES);
+    const burstSpawnColor = new Float32Array(BURST_CAP * 3);
+    const burstDisplayColor = new Float32Array(BURST_CAP * 3);
+    const burstSize = new Float32Array(BURST_CAP);
+    const burstVelocity = new Float32Array(BURST_CAP * 3);
+    const burstLife = new Float32Array(BURST_CAP); // 0 = dead/available
+    const burstMaxLife = new Float32Array(BURST_CAP);
+    let nextBurstSlot = 0;
 
-    const rand = (a, b) => a + Math.random() * (b - a);
-
-    for (let i = 0; i < AMBIENT_COUNT; i++) {
-      const r = rand(2.5, 5.5);
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(rand(-1, 1));
-      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-      positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
-      positions[i * 3 + 2] = r * Math.cos(phi);
-      const c = paletteColor('mono', 0, 0);
-      spawnColor[i * 3] = displayColor[i * 3] = c.r * 0.35;
-      spawnColor[i * 3 + 1] = displayColor[i * 3 + 1] = c.g * 0.35;
-      spawnColor[i * 3 + 2] = displayColor[i * 3 + 2] = c.b * 0.35;
-      sizes[i] = rand(2, 5);
-      velocities[i * 3] = rand(-0.05, 0.05);
-      velocities[i * 3 + 1] = rand(-0.05, 0.05);
-      velocities[i * 3 + 2] = rand(-0.05, 0.05);
-      life[i] = Infinity;
-      maxLife[i] = Infinity;
-    }
-    for (let i = AMBIENT_COUNT; i < MAX_PARTICLES; i++) {
-      life[i] = 0; // dead / available
-    }
-    let nextBurstSlot = AMBIENT_COUNT;
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(displayColor, 3));
-    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-
-    const material = new THREE.PointsMaterial({
+    const burstGeometry = new THREE.BufferGeometry();
+    burstGeometry.setAttribute('position', new THREE.BufferAttribute(burstPositions, 3));
+    burstGeometry.setAttribute('color', new THREE.BufferAttribute(burstDisplayColor, 3));
+    burstGeometry.setAttribute('size', new THREE.BufferAttribute(burstSize, 1));
+    const burstMaterial = new THREE.PointsMaterial({
       size: 1,
       map: sprite,
       vertexColors: true,
@@ -172,8 +189,8 @@ export default function GridVisualizer3D() {
     // vertex color instead -- simplest thing that reads as "varied" while
     // still using the plain (non-shader-authored) PointsMaterial, so
     // there's no custom GLSL to keep working across three.js versions.
-    const points = new THREE.Points(geometry, material);
-    scene.add(points);
+    const burstPoints = new THREE.Points(burstGeometry, burstMaterial);
+    scene.add(burstPoints);
 
     const spawnBurst = (payload) => {
       const { intensity, palette } = settingsRef.current;
@@ -189,23 +206,22 @@ export default function GridVisualizer3D() {
 
       for (let n = 0; n < count; n++) {
         const slot = nextBurstSlot;
-        nextBurstSlot++;
-        if (nextBurstSlot >= MAX_PARTICLES) nextBurstSlot = AMBIENT_COUNT;
+        nextBurstSlot = (nextBurstSlot + 1) % BURST_CAP;
 
         const dir = new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize();
         const speed = rand(1.2, 3) * (0.7 + gain * 0.6);
-        positions[slot * 3] = ox;
-        positions[slot * 3 + 1] = oy;
-        positions[slot * 3 + 2] = oz;
-        velocities[slot * 3] = dir.x * speed;
-        velocities[slot * 3 + 1] = dir.y * speed;
-        velocities[slot * 3 + 2] = dir.z * speed;
-        spawnColor[slot * 3] = color.r;
-        spawnColor[slot * 3 + 1] = color.g;
-        spawnColor[slot * 3 + 2] = color.b;
-        sizes[slot] = rand(3, 7) * (0.8 + gain * 0.4);
-        maxLife[slot] = rand(0.6, 1.3);
-        life[slot] = maxLife[slot];
+        burstPositions[slot * 3] = ox;
+        burstPositions[slot * 3 + 1] = oy;
+        burstPositions[slot * 3 + 2] = oz;
+        burstVelocity[slot * 3] = dir.x * speed;
+        burstVelocity[slot * 3 + 1] = dir.y * speed;
+        burstVelocity[slot * 3 + 2] = dir.z * speed;
+        burstSpawnColor[slot * 3] = color.r;
+        burstSpawnColor[slot * 3 + 1] = color.g;
+        burstSpawnColor[slot * 3 + 2] = color.b;
+        burstSize[slot] = rand(3, 7) * (0.8 + gain * 0.4);
+        burstMaxLife[slot] = rand(0.6, 1.3);
+        burstLife[slot] = burstMaxLife[slot];
       }
     };
 
@@ -231,44 +247,53 @@ export default function GridVisualizer3D() {
       const dt = Math.min((now - lastT) / 1000, 0.05);
       lastT = now;
 
-      points.rotation.y += dt * 0.05;
-      points.rotation.x += dt * 0.01;
+      ambientPoints.rotation.y += dt * 0.05;
+      ambientPoints.rotation.x += dt * 0.01;
+      burstPoints.rotation.y = ambientPoints.rotation.y;
+      burstPoints.rotation.x = ambientPoints.rotation.x;
       bloomPass.strength = settingsRef.current.bloom;
 
-      for (let i = 0; i < AMBIENT_COUNT; i++) {
-        positions[i * 3] += velocities[i * 3] * dt;
-        positions[i * 3 + 1] += velocities[i * 3 + 1] * dt;
-        positions[i * 3 + 2] += velocities[i * 3 + 2] * dt;
-        const dist = Math.hypot(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+      // Live "background spots" count -- both the update loop bound and
+      // the draw range track it, so turning it down is a real CPU/GPU
+      // saving, not just a smaller visible slice of a fixed-cost loop.
+      const ambientCount = Math.max(0, Math.min(AMBIENT_CAP, Math.round(settingsRef.current.ambientCount)));
+      ambientGeometry.setDrawRange(0, ambientCount);
+      for (let i = 0; i < ambientCount; i++) {
+        ambientPositions[i * 3] += ambientVelocity[i * 3] * dt;
+        ambientPositions[i * 3 + 1] += ambientVelocity[i * 3 + 1] * dt;
+        ambientPositions[i * 3 + 2] += ambientVelocity[i * 3 + 2] * dt;
+        const dist = Math.hypot(ambientPositions[i * 3], ambientPositions[i * 3 + 1], ambientPositions[i * 3 + 2]);
         if (dist > 6 || dist < 2) {
-          velocities[i * 3] *= -1;
-          velocities[i * 3 + 1] *= -1;
-          velocities[i * 3 + 2] *= -1;
+          ambientVelocity[i * 3] *= -1;
+          ambientVelocity[i * 3 + 1] *= -1;
+          ambientVelocity[i * 3 + 2] *= -1;
         }
       }
-      for (let i = AMBIENT_COUNT; i < MAX_PARTICLES; i++) {
-        if (life[i] <= 0) continue;
-        life[i] -= dt;
-        if (life[i] <= 0) {
-          displayColor[i * 3] = displayColor[i * 3 + 1] = displayColor[i * 3 + 2] = 0;
+      if (ambientCount > 0) ambientGeometry.attributes.position.needsUpdate = true;
+
+      for (let i = 0; i < BURST_CAP; i++) {
+        if (burstLife[i] <= 0) continue;
+        burstLife[i] -= dt;
+        if (burstLife[i] <= 0) {
+          burstDisplayColor[i * 3] = burstDisplayColor[i * 3 + 1] = burstDisplayColor[i * 3 + 2] = 0;
           continue;
         }
-        velocities[i * 3 + 1] -= dt * 0.6; // gentle gravity
-        velocities[i * 3] *= 1 - dt * 0.4; // drag
-        velocities[i * 3 + 1] *= 1 - dt * 0.4;
-        velocities[i * 3 + 2] *= 1 - dt * 0.4;
-        positions[i * 3] += velocities[i * 3] * dt;
-        positions[i * 3 + 1] += velocities[i * 3 + 1] * dt;
-        positions[i * 3 + 2] += velocities[i * 3 + 2] * dt;
-        const fade = Math.max(0, life[i] / maxLife[i]);
+        burstVelocity[i * 3 + 1] -= dt * 0.6; // gentle gravity
+        burstVelocity[i * 3] *= 1 - dt * 0.4; // drag
+        burstVelocity[i * 3 + 1] *= 1 - dt * 0.4;
+        burstVelocity[i * 3 + 2] *= 1 - dt * 0.4;
+        burstPositions[i * 3] += burstVelocity[i * 3] * dt;
+        burstPositions[i * 3 + 1] += burstVelocity[i * 3 + 1] * dt;
+        burstPositions[i * 3 + 2] += burstVelocity[i * 3 + 2] * dt;
+        const fade = Math.max(0, burstLife[i] / burstMaxLife[i]);
         const idx = i * 3;
-        displayColor[idx] = spawnColor[idx] * fade;
-        displayColor[idx + 1] = spawnColor[idx + 1] * fade;
-        displayColor[idx + 2] = spawnColor[idx + 2] * fade;
+        burstDisplayColor[idx] = burstSpawnColor[idx] * fade;
+        burstDisplayColor[idx + 1] = burstSpawnColor[idx + 1] * fade;
+        burstDisplayColor[idx + 2] = burstSpawnColor[idx + 2] * fade;
       }
+      burstGeometry.attributes.position.needsUpdate = true;
+      burstGeometry.attributes.color.needsUpdate = true;
 
-      geometry.attributes.position.needsUpdate = true;
-      geometry.attributes.color.needsUpdate = true;
       composer.render();
     };
     animate();
@@ -278,8 +303,10 @@ export default function GridVisualizer3D() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', onResize);
       unsubscribe();
-      geometry.dispose();
-      material.dispose();
+      ambientGeometry.dispose();
+      ambientMaterial.dispose();
+      burstGeometry.dispose();
+      burstMaterial.dispose();
       sprite.dispose();
       composer.dispose();
       renderer.dispose();
