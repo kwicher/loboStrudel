@@ -1,33 +1,23 @@
-// Bridges the Grid's running patterns to the separate 3D visualizer window.
+// Bridges the Grid's running patterns to the visualizer popup.
 //
-// Two pieces, both safe no-ops outside Tauri (checked via isTauri() from
-// ../tauri.mjs so the web REPL build never touches these modules' Tauri
-// imports):
-//
-// 1. ensureVisualizerHook() installs a single global hook,
-//    window.__strudelGridVisualizerHook, that GridTab.jsx's combined buffer
-//    calls once per hap trigger (see buildCombinedCode's `all(x =>
-//    x.onTrigger(...))` line). This function turns a Strudel hap into a
-//    small plain object and emits it as a 'grid-hap' Tauri event -- the
-//    only channel between the main window and the visualizer window, since
-//    two webviews are two separate JS realms with no shared memory.
-//
-// 2. openVisualizerWindow() opens (or focuses, if already open) the
-//    'grid-visualizer' native window, which loads /visualizer -- a bare
-//    Astro page (see src/pages/visualizer.astro) that mounts
-//    GridVisualizer3D.jsx and listens for the same 'grid-hap' event.
-import { isTauri } from '../tauri.mjs';
+// This used to go through Tauri's cross-window event bus, back when the
+// visualizer opened as a separate native OS window (a webview with no
+// shared memory with the main one). It's a plain in-window popup now (see
+// GridVisualizerPopup.jsx -- "I think we need... something colorfull and
+// 3D... visualisation shold not open as a seprate brawser window but as a
+// movable popup DIV"), so it's the same JS realm as the Grid: a tiny
+// pub/sub is all that's needed, no serialization, no Tauri, and it works
+// in the plain web REPL build too, not just the desktop app.
+import { atom } from 'nanostores';
+import { useStore } from '@nanostores/react';
 
-const HAP_EVENT = 'grid-hap';
-const VISUALIZER_LABEL = 'grid-visualizer';
-
+const listeners = new Set();
 let hookInstalled = false;
-let emitFn = null;
 
-// Reduce a Strudel hap to a small, structured-clone-safe plain object.
-// hap.value can be a string (sample name), a number, or an object with
-// note/n/s/gain/etc -- normalize all of those shapes here so the visualizer
-// never has to know about Strudel's internal Hap/Fraction types.
+// Reduce a Strudel hap to a small plain object. hap.value can be a
+// string (sample name), a number, or an object with note/n/s/gain/etc --
+// normalize all of those shapes here so the visualizer never has to know
+// about Strudel's internal Hap/Fraction types.
 function sanitizeHap(hap) {
   const value = hap?.value;
   if (value == null) return {};
@@ -42,37 +32,54 @@ function sanitizeHap(hap) {
   return out;
 }
 
+// Installs window.__strudelGridVisualizerHook once -- GridTab.jsx's
+// combined buffer calls this via `all(x => x.onTrigger(...))` (see
+// buildCombinedCode) once per hap trigger, whether or not the popup is
+// currently open or anyone is subscribed. Idempotent and safe to call
+// from more than one place.
 export function ensureVisualizerHook() {
-  if (!isTauri() || hookInstalled) return;
+  if (hookInstalled) return;
   hookInstalled = true;
   window.__strudelGridVisualizerHook = (hap) => {
-    if (!emitFn) return; // event module still loading -- drop this hap rather than block audio
+    if (listeners.size === 0) return;
     const payload = sanitizeHap(hap);
-    emitFn(HAP_EVENT, payload).catch(() => {});
+    listeners.forEach((cb) => {
+      try {
+        cb(payload);
+      } catch (e) {
+        console.error('[gridVisualizer] hap listener threw', e);
+      }
+    });
   };
-  import('@tauri-apps/api/event')
-    .then(({ emit }) => {
-      emitFn = emit;
-    })
-    .catch(() => {});
 }
 
-export async function openVisualizerWindow() {
-  if (!isTauri()) return;
-  const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-  const existing = await WebviewWindow.getByLabel(VISUALIZER_LABEL);
-  if (existing) {
-    existing.setFocus().catch(() => {});
-    return;
-  }
-  const win = new WebviewWindow(VISUALIZER_LABEL, {
-    url: '/visualizer',
-    title: 'Strudel Grid Visualizer',
-    width: 900,
-    height: 600,
-    resizable: true,
-  });
-  win.once('tauri://error', (e) => {
-    console.error('failed to open grid visualizer window', e);
-  });
+// Subscribes to sanitized hap payloads; returns an unsubscribe function.
+export function subscribeHaps(callback) {
+  listeners.add(callback);
+  return () => listeners.delete(callback);
 }
+
+// Whether the visualizer popup is open. A plain in-memory atom (not
+// sessionStorage-backed like patternGrid.mjs's panel toggles) -- there's
+// no strong reason for "was the visualizer open" to survive a reload,
+// and keeping it simple avoids a second sessionAtom helper here.
+const $popupOpen = atom(false);
+export const useVisualizerPopupOpen = () => useStore($popupOpen);
+export const openVisualizerPopup = () => $popupOpen.set(true);
+export const closeVisualizerPopup = () => $popupOpen.set(false);
+export const toggleVisualizerPopup = () => $popupOpen.set(!$popupOpen.get());
+
+// Live-customizable visual settings, read by GridVisualizer3D.jsx and
+// written by VisualizerControls in GridToolsPanel.jsx -- so nudging, say,
+// the bloom slider takes effect on the running scene immediately rather
+// than needing the popup reopened.
+const DEFAULT_VISUALIZER_SETTINGS = {
+  palette: 'spectrum', // 'spectrum' | 'mono' | 'fire'
+  intensity: 1, // burst size/particle-count multiplier
+  bloom: 1.2, // post-processing bloom strength
+};
+const $visualizerSettings = atom(DEFAULT_VISUALIZER_SETTINGS);
+export const useVisualizerSettings = () => useStore($visualizerSettings);
+export const setVisualizerSetting = (key, value) => {
+  $visualizerSettings.set({ ...$visualizerSettings.get(), [key]: value });
+};

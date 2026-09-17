@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react';
 import { setInterval, clearInterval } from 'worker-timers';
 import { toggleShortcuts } from '../../shortcutsOverlay.mjs';
 import { LevelMeter } from './LevelMeter';
-import { Toolbox } from './Toolbox';
 import cx from '@src/cx.mjs';
 import { StrudelIcon } from '@src/repl/components/icons/StrudelIcon';
 import { useSettings, setIsZen, setIsPanelOpened } from '../../../settings.mjs';
@@ -227,7 +226,6 @@ function MainMenu({ context, isEmbedded = false, className }) {
           <ExclamationTriangleIcon className="w-4 h-4" />
         </button>
       )}
-      {!isEmbedded && <Toolbox context={context} />}
       <button
         onClick={handleEvaluate}
         title="update"

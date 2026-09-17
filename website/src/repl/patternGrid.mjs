@@ -222,6 +222,31 @@ export function clearGrid() {
   setTracks([]);
 }
 
+// Set around every GridTab evaluate (GridTab.jsx's evaluateCombined) so
+// useReplContext.jsx's afterEval can tell "this evaluate came from the
+// grid's ephemeral combined buffer" apart from "this evaluate came from
+// the user editing/running the pattern they're actually viewing" -- the
+// two share the exact same editor/evaluate pipeline, and without this
+// flag afterEval unconditionally persists whatever it just evaluated as
+// the *viewed* pattern's new saved code. That silently overwrote
+// whichever tab happened to be open with the grid's combined buffer on
+// every track advance, mute toggle, or stop (stopping evaluates
+// "silence") -- a real bug, not the intentional kind of non-destructive
+// ephemeral-buffer trick documented elsewhere in this file and in
+// GridTab.jsx/Toolbox.jsx (see patternTitles.mjs's header comment for the
+// bug those techniques were built to avoid; this is that same class of
+// bug, just via a different path). A plain module-level flag is enough:
+// GridTab's evaluate calls are synchronous with the afterEval callback
+// they trigger (see StrudelMirror's evaluate()), so there's no window for
+// a real, non-grid evaluate to race in between.
+let gridEvaluating = false;
+export function setGridEvaluating(value) {
+  gridEvaluating = value;
+}
+export function isGridEvaluating() {
+  return gridEvaluating;
+}
+
 // Whether the grid is docked open below the code editor. Deliberately its
 // own toggle rather than routing through the app's generic panel system
 // (activeFooter/isPanelOpen, Panel.jsx) -- that system only offers "narrow

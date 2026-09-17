@@ -12,6 +12,7 @@
 // a different MIME type on the payload so the two don't get confused.
 import { useEffect, useRef, useState } from 'react';
 import {
+  AdjustmentsHorizontalIcon,
   ArrowDownTrayIcon,
   ArrowPathIcon,
   FolderOpenIcon,
@@ -23,7 +24,7 @@ import {
   TrashIcon,
 } from '@heroicons/react/16/solid';
 import { GridToolsPanel } from './GridToolsPanel.jsx';
-import { ensureVisualizerHook } from '../../gridVisualizer.mjs';
+import { ensureVisualizerHook, openVisualizerPopup } from '../../gridVisualizer.mjs';
 import cx from '@src/cx.mjs';
 import { useSettings } from '../../../settings.mjs';
 import { useViewingPatternData, userPattern } from '../../../user_pattern_utils.mjs';
@@ -42,6 +43,7 @@ import {
   moveEntry,
   removeFromTrack,
   removeTrack,
+  setGridEvaluating,
   setTrackEntryCycles,
   toggleEntryEnabled,
   toggleMuteTrack,
@@ -156,6 +158,10 @@ export function GridTab({ context }) {
   // than only once the in-flight timer happens to fire.
   const [visualize, setVisualize] = useState(false);
   const visualizeRef = useRef(visualize);
+  // Whether the docked Grid tools side panel is open -- a proper column
+  // next to the track list (see GridToolsPanel.jsx's header comment for
+  // why this replaced a floating popover).
+  const [toolsOpen, setToolsOpen] = useState(false);
   // Coalesces same-tick evaluateCombined() calls into one -- if several
   // tracks advance (or a mute/enable/visualize toggle lands) in the same
   // JS tick, this collapses them into a single re-evaluate instead of
@@ -188,7 +194,18 @@ export function GridTab({ context }) {
     const editor = context.editorRef?.current;
     if (!editor) return;
     editor.setCode(code);
-    await editor.evaluate();
+    // Flagged so useReplContext.jsx's afterEval knows this evaluate is the
+    // grid's own ephemeral combined buffer, not the user editing whatever
+    // pattern tab happens to be open -- see patternGrid.mjs's
+    // isGridEvaluating() comment for the bug this prevents (this used to
+    // silently overwrite the viewed pattern's saved code on every track
+    // advance/mute/stop).
+    setGridEvaluating(true);
+    try {
+      await editor.evaluate();
+    } finally {
+      setGridEvaluating(false);
+    }
   };
 
   const scheduleEvaluate = () => {
@@ -415,7 +432,11 @@ export function GridTab({ context }) {
   };
 
   return (
-    <div className="p-2 flex flex-col gap-3 text-sm h-full overflow-auto" onDragLeave={() => setDropTarget(null)}>
+    <div className="flex h-full overflow-hidden">
+      <div
+        className="p-2 flex flex-col gap-3 text-sm grow min-w-0 overflow-auto"
+        onDragLeave={() => setDropTarget(null)}
+      >
       <div className="flex items-center gap-2 shrink-0">
         <button
           onClick={playing ? stopGrid : playGrid}
@@ -433,7 +454,13 @@ export function GridTab({ context }) {
           <ArrowPathIcon className="w-4 h-4" />
         </button>
         <span className="text-xs uppercase tracking-wide opacity-50">grid</span>
-        <GridToolsPanel context={context} visualizerOn={visualize} onToggleVisualizer={onToggleVisualize} />
+        <button
+          onClick={() => setToolsOpen((v) => !v)}
+          title="grid tools: tempo, mutate, filter sweep, euclidean rhythm, and the visualizer"
+          className={cx('px-1', toolsOpen ? 'opacity-100 text-[#89ddff]' : 'opacity-60 hover:opacity-90')}
+        >
+          <AdjustmentsHorizontalIcon className="w-4 h-4" />
+        </button>
         {TAURI && (
           <button
             onClick={openTrackFromFile}
@@ -605,6 +632,16 @@ export function GridTab({ context }) {
         >
           drag a pattern tab here to start a new track
         </div>
+      )}
+      </div>
+      {toolsOpen && (
+        <GridToolsPanel
+          context={context}
+          onClose={() => setToolsOpen(false)}
+          visualizerOn={visualize}
+          onToggleVisualizer={onToggleVisualize}
+          onOpenVisualizer={openVisualizerPopup}
+        />
       )}
     </div>
   );

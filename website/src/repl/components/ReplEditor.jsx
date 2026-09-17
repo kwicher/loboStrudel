@@ -4,6 +4,7 @@ import Loader from '@src/repl/components/Loader';
 import { BottomPanel, MainPanel, RightPanel } from '@src/repl/components/panel/Panel';
 import { AppSidebar } from '@src/repl/components/panel/AppSidebar';
 import { GridTab } from '@src/repl/components/panel/GridTab';
+import { GridVisualizerPopup } from '@src/repl/components/panel/GridVisualizerPopup';
 import { PatternTabs } from '@src/repl/components/panel/PatternTabs';
 import { ShortcutsOverlay } from '@src/repl/components/panel/ShortcutsOverlay';
 import UserFacingErrorMessage from '@src/repl/components/UserFacingErrorMessage';
@@ -56,6 +57,7 @@ export default function ReplEditor(Props) {
           {!isZen && panelPosition === 'right' && <RightPanel context={context} />}
         </div>
       </div>
+      <GridVisualizerPopup />
       <ShortcutsOverlay />
       <UserFacingErrorMessage error={error} />
       {!isZen && panelPosition === 'bottom' && <BottomPanel context={context} />}

@@ -20,6 +20,7 @@ import {
 } from '@strudel/webaudio';
 import { setVersionDefaultsFrom } from './util.mjs';
 import { addSnapshot } from './patternSnapshots.mjs';
+import { isGridEvaluating } from './patternGrid.mjs';
 import { StrudelMirror, defaultSettings } from '@strudel/codemirror';
 import { clearHydra } from '@strudel/hydra';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -112,6 +113,13 @@ export function useReplContext() {
         const { code } = all;
         //post to iframe parent (like Udels) if it exists...
         window.parent?.postMessage(code);
+
+        // The grid's ephemeral combined buffer (see patternGrid.mjs's
+        // isGridEvaluating() comment) -- never the viewed pattern's own
+        // edit, so none of the persistence below applies. Stop here:
+        // nothing after this point should treat "the grid just hot-
+        // swapped tracks" as "the user just saved a change."
+        if (isGridEvaluating()) return;
 
         // Get the full buffer content from the editor instead of just the evaluated block
         const fullBufferCode = editorRef.current?.code || code;
