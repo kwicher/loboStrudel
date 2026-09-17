@@ -134,7 +134,26 @@ export const setSettingsTab = (tab) => settingsMap.setKey('settingsTab', tab);
 
 export const storePrebakeScript = (script) => settingsMap.setKey('prebakeScript', script);
 
-export const setIsZen = (active) => settingsMap.setKey('isZen', !!active);
+// Zen mode doubles as "performance mode": the algorave/live-coding
+// research is explicit that code projected at a normal editor font size is
+// unreadable past the front row, so entering zen also bumps the font size
+// (remembering the previous value to restore on exit) rather than only
+// hiding the sidebar/panels the way it used to.
+let preZenFontSize = null;
+export const setIsZen = (active) => {
+  active = !!active;
+  if (active) {
+    if (preZenFontSize == null) {
+      const current = Number(settingsMap.get().fontSize) || 18;
+      preZenFontSize = current;
+      settingsMap.setKey('fontSize', Math.round(current * 1.4));
+    }
+  } else if (preZenFontSize != null) {
+    settingsMap.setKey('fontSize', preZenFontSize);
+    preZenFontSize = null;
+  }
+  settingsMap.setKey('isZen', active);
+};
 
 const patternSetting = (key) =>
   register(key, (value, pat) =>

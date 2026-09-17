@@ -3,6 +3,7 @@ import { memo, useEffect, useMemo, useState, Fragment } from 'react';
 import jsdocJson from '../../../../../doc.json';
 import { Textbox } from '@src/repl/components/panel/SettingsTab';
 import { settingsMap, useSettings } from '@src/settings.mjs';
+import { PanelHeader } from './PanelHeader.jsx';
 
 const isValid = ({ name, description, tags = [] }) => {
   const isSupradoughOnly = tags.includes('supradough') && !tags.includes('superdough');
@@ -117,7 +118,9 @@ export const Reference = memo(function Reference() {
   let setReferenceTag = (value) => settingsMap.setKey('referenceTag', value);
 
   return (
-    <div className="flex h-full w-full overflow-hidden">
+    <div className="flex h-full w-full overflow-hidden flex-col">
+      <PanelHeader title="Reference" />
+      <div className="flex h-full w-full overflow-hidden">
       <div className="h-full text-foreground flex flex-col w-1/3  border-r border-muted">
         {/* bg-background */}
         <div className="w-full flex">
@@ -237,6 +240,7 @@ export const Reference = memo(function Reference() {
           {detailVisibleFunctions.length > 0 && <div className="h-screen" />}
         </div>
       </div>
+    </div>
     </div>
   );
 });

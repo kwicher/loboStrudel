@@ -3,6 +3,7 @@ import { useSettings } from '../../../settings.mjs';
 import { useStore } from '@nanostores/react';
 import { $strudel_log_history } from '../useLogger';
 import { useEffect, useRef } from 'react';
+import { PanelHeader } from './PanelHeader.jsx';
 
 export function ConsoleTab() {
   const log = useStore($strudel_log_history);
@@ -15,8 +16,9 @@ export function ConsoleTab() {
     }
   }, [log]);
   return (
-    <div id="console-tab" className="break-all w-full h-full" style={{ fontFamily }}>
-      <div className="h-full w-full overflow-auto space-y-1 p-2 rounded-md" ref={scrollRef}>
+    <div id="console-tab" className="break-all w-full h-full flex flex-col" style={{ fontFamily }}>
+      <PanelHeader title="Console" subtitle={`${log.length} lines`} />
+      <div className="w-full grow overflow-auto space-y-1 p-2 rounded-md" ref={scrollRef}>
         {' '}
         {/* bg-background */}
         {log.map((l, i) => {

@@ -23,6 +23,9 @@ fn main() {
   let (async_output_transmitter_osc, async_output_receiver_osc) = mpsc::channel(1);
   tauri::Builder
     ::default()
+    .plugin(tauri_plugin_dialog::init())
+    .plugin(tauri_plugin_fs::init())
+    .plugin(tauri_plugin_clipboard_manager::init())
     .manage(midibridge::AsyncInputTransmit {
       inner: Mutex::new(async_input_transmitter_midi),
     })
@@ -31,7 +34,7 @@ fn main() {
     })
     .invoke_handler(tauri::generate_handler![midibridge::sendmidi, oscbridge::sendosc])
     .setup(|app| {
-      let window = Arc::new(app.get_window("main").unwrap());
+      let window = Arc::new(app.get_webview_window("main").unwrap());
       let logger = Logger { window };
       midibridge::init(
         logger.clone(),
@@ -40,6 +43,10 @@ fn main() {
         async_output_transmitter_midi
       );
       oscbridge::init(logger, async_input_receiver_osc, async_output_receiver_osc, async_output_transmitter_osc);
+      // No custom native menu -- navigation (patterns, file actions, panel
+      // switching) lives in the in-app sidebar instead (see AppSidebar.jsx),
+      // not the system menu bar. Tauri's own default menu (Edit copy/paste
+      // etc.) stands as-is since we never call app.set_menu() here.
       Ok(())
     })
     .run(tauri::generate_context!())

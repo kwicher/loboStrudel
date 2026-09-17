@@ -16,8 +16,10 @@ import {
   initAudioOnFirstClick,
   resetDefaults,
   initAudio,
+  panicAudio,
 } from '@strudel/webaudio';
 import { setVersionDefaultsFrom } from './util.mjs';
+import { addSnapshot } from './patternSnapshots.mjs';
 import { StrudelMirror, defaultSettings } from '@strudel/codemirror';
 import { clearHydra } from '@strudel/hydra';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -102,6 +104,10 @@ export function useReplContext() {
         }
       },
       beforeEval: () => audioReady,
+      onPanic: () => {
+        panicAudio();
+        editor.stop();
+      },
       afterEval: (all) => {
         const { code } = all;
         //post to iframe parent (like Udels) if it exists...
@@ -136,6 +142,11 @@ export function useReplContext() {
           setViewingPatternData(userPattern.update(id, data).data);
         }
         setActivePattern(id);
+        // Every evaluate is a "take" worth being able to get back to,
+        // regardless of whether it came from a keyboard shortcut, the
+        // update button, or a vim/helix :w -- this is the one place all of
+        // those paths funnel through.
+        addSnapshot(id, fullBufferCode);
       },
       bgFill: false,
     });
@@ -219,6 +230,35 @@ export function useReplContext() {
     editorRef.current.evaluate();
   };
 
+  // Panic: instantly silences whatever's sounding (a short master-gain
+  // dip, including notes already triggered with long releases that
+  // stopping the scheduler alone wouldn't reach) and stops the scheduler,
+  // so nothing new gets scheduled after it. Bound to Ctrl-Shift-. in the
+  // editor (packages/codemirror/codemirror.mjs) and to the panic button in
+  // the header (Panel.jsx).
+  const handlePanic = () => {
+    panicAudio();
+    editorRef.current?.stop();
+  };
+
+  // The CM6 keymap binding for Ctrl-Shift-. (packages/codemirror/codemirror.mjs)
+  // only fires while the code editor itself has focus -- exactly like the
+  // existing Ctrl-. / Alt-. stop bindings. That's fine for "stop", but panic
+  // is meant to work as an emergency silence from anywhere (Sounds tab, a
+  // popover, the tempo box, wherever focus happens to be), so it also needs
+  // a global window-level listener, the same pattern ShortcutsOverlay.jsx
+  // already uses for "?".
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key !== '.' || !e.ctrlKey || !e.shiftKey) return;
+      e.preventDefault();
+      handlePanic();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleExport = async (begin, end, sampleRate, maxPolyphony, multiChannelOrbits, downloadName = undefined) => {
     await editorRef.current.evaluate(false);
     editorRef.current.repl.scheduler.stop();
@@ -270,6 +310,7 @@ export function useReplContext() {
     handleShuffle,
     handleShare,
     handleEvaluate,
+    handlePanic,
     handleExport,
     init,
     error,

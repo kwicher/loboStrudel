@@ -11,6 +11,7 @@ import { ActionButton } from '../button/action-button.jsx';
 import { exportScript, ImportPrebakeScriptButton } from './ImportPrebakeScriptButton.jsx';
 import { useEffect, useRef } from 'react';
 import cx from '@src/cx.mjs';
+import { PanelHeader } from './PanelHeader.jsx';
 
 const inputClass =
   'bg-background text-xs h-8 max-h-8 border border-box rounded-0 text-foreground border-muted placeholder-muted focus:outline-none focus:ring-0 focus:border-foreground';
@@ -395,6 +396,7 @@ export function SettingsTab({ started }) {
   const { settingsTab } = useSettings();
   return (
     <div className="w-full h-full text-foreground flex flex-col overflow-hidden">
+      <PanelHeader title="Settings" />
       <div className="px-2 shrink-0 h-8 space-x-4 flex max-w-full overflow-x-auto border-b border-muted">
         <ButtonGroup
           wrap

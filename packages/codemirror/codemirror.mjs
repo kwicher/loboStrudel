@@ -76,7 +76,7 @@ export const codemirrorSettings = persistentAtom('codemirror-settings', defaultS
 });
 
 // https://codemirror.net/docs/guide/
-export function initEditor({ initialCode = '', onChange, onEvaluate, onStop, root, mondo, strudelMirror }) {
+export function initEditor({ initialCode = '', onChange, onEvaluate, onStop, onPanic, root, mondo, strudelMirror }) {
   const settings = codemirrorSettings.get();
   const initialSettings = Object.keys(compartments).map((key) =>
     compartments[key].of(extensions[key](parseBooleans(settings[key]))),
@@ -144,14 +144,6 @@ export function initEditor({ initialCode = '', onChange, onEvaluate, onStop, roo
             key: 'Alt-q',
             run: (view) => jumpToCharacter(view, '$', -1),
           },
-          /* {
-            key: 'Ctrl-Shift-.',
-            run: () => (onPanic ? onPanic() : onStop?.()),
-          },
-          {
-            key: 'Ctrl-Shift-Enter',
-            run: () => (onReEvaluate ? onReEvaluate() : onEvaluate?.()),
-          }, */
         ]),
       ),
     ],
@@ -266,6 +258,7 @@ export class StrudelMirror {
       },
       onEvaluate: () => this.evaluate(),
       onStop: () => this.stop(),
+      onPanic: () => (replOptions?.onPanic ? replOptions.onPanic() : this.stop()),
       mondo: replOptions.mondo,
       strudelMirror: this,
     });

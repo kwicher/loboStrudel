@@ -1,19 +1,24 @@
-import { Bars3Icon, PlayIcon, StopIcon, XMarkIcon } from '@heroicons/react/16/solid';
+import { Bars3Icon, ExclamationTriangleIcon, PlayIcon, StopIcon } from '@heroicons/react/16/solid';
+import { useEffect, useRef, useState } from 'react';
+import { setInterval, clearInterval } from 'worker-timers';
+import { toggleShortcuts } from '../../shortcutsOverlay.mjs';
+import { LevelMeter } from './LevelMeter';
+import { Toolbox } from './Toolbox';
 import cx from '@src/cx.mjs';
 import { StrudelIcon } from '@src/repl/components/icons/StrudelIcon';
-import { useSettings, setIsZen, setIsPanelOpened, setActiveFooter as setTab } from '../../../settings.mjs';
+import { useSettings, setIsZen, setIsPanelOpened } from '../../../settings.mjs';
 import '../../Repl.css';
 import { useLogger } from '../useLogger';
 import { ConsoleTab } from './ConsoleTab';
 import ExportTab from './ExportTab';
 import { FilesTab } from './FilesTab';
-import { PatternsTab } from './PatternsTab';
 import { Reference } from './Reference';
 import { SettingsTab } from './SettingsTab';
 import { SoundsTab } from './SoundsTab';
 import { WelcomeTab } from './WelcomeTab';
+import { isTauri } from '@src/tauri.mjs';
 
-const TAURI = typeof window !== 'undefined' && window.__TAURI__;
+const TAURI = typeof window !== 'undefined' && isTauri();
 
 const { BASE_URL } = import.meta.env;
 const baseNoTrailing = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
@@ -121,8 +126,84 @@ export function Footer({ context, isEmbedded = false }) {
   );
 }
 
+// Tempo has no on-screen control anywhere else -- it's otherwise only
+// reachable by finding/typing a setcps()/setcpm() line in the pattern
+// itself. scheduler.cps is a plain mutable number, not reactive (no
+// nanostore, no change event), so this polls it on an interval rather than
+// subscribing -- cheap, and tempo doesn't change fast enough to need
+// per-frame polling. Displayed as bpm (cps * 60) since that's the more
+// familiar unit; converted back to cps on commit.
+function TempoControl({ context }) {
+  const [liveBpm, setLiveBpm] = useState(120);
+  const [draft, setDraft] = useState(null);
+  const editingRef = useRef(false);
+  const skipNextBlurRef = useRef(false);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (editingRef.current) return;
+      const cps = context.editorRef?.current?.repl?.scheduler?.cps;
+      if (typeof cps === 'number' && !isNaN(cps)) {
+        const bpm = Math.round(cps * 60 * 10) / 10;
+        setLiveBpm((prev) => (Math.abs(prev - bpm) > 0.05 ? bpm : prev));
+      }
+    }, 250);
+    return () => clearInterval(id);
+  }, [context.editorRef]);
+
+  const commit = (rawValue) => {
+    const bpm = parseFloat(rawValue);
+    if (!isNaN(bpm) && bpm > 0) {
+      context.editorRef?.current?.repl?.setCps(bpm / 60);
+      setLiveBpm(Math.round(bpm * 10) / 10);
+    }
+    setDraft(null);
+    editingRef.current = false;
+  };
+
+  return (
+    <div className="flex items-center gap-1 px-2 text-sm text-foreground" title="tempo (bpm = cps × 60)">
+      <span className="text-xs opacity-50">bpm</span>
+      <input
+        type="number"
+        min={1}
+        step={1}
+        value={draft ?? liveBpm}
+        onFocus={() => {
+          editingRef.current = true;
+          setDraft(String(liveBpm));
+        }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => {
+          if (skipNextBlurRef.current) {
+            skipNextBlurRef.current = false;
+            editingRef.current = false;
+            return;
+          }
+          commit(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit(e.target.value);
+            e.currentTarget.blur();
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            skipNextBlurRef.current = true;
+            setDraft(null);
+            editingRef.current = false;
+            e.currentTarget.blur();
+          }
+        }}
+        className="w-14 bg-background text-foreground border border-muted rounded px-1 py-0.5 text-sm outline-none focus:border-foreground"
+      />
+    </div>
+  );
+}
+
 function MainMenu({ context, isEmbedded = false, className }) {
-  const { started, pending, isDirty, activeCode, handleTogglePlay, handleEvaluate, handleShare } = context;
+  const { started, pending, isDirty, activeCode, handleTogglePlay, handleEvaluate, handleShare, handlePanic } = context;
   const { isCSSAnimationDisabled } = useSettings();
   return (
     <div className={cx('flex text-sm max-w-full shrink-0 overflow-hidden text-foreground px-2 h-10', className)}>
@@ -136,6 +217,17 @@ function MainMenu({ context, isEmbedded = false, className }) {
           {!isEmbedded && <span>{pending ? '...' : started ? 'stop' : 'play'}</span>}
         </span>
       </button>
+      {!isEmbedded && <LevelMeter context={context} />}
+      {!isEmbedded && (
+        <button
+          onClick={handlePanic}
+          title="panic (Ctrl-Shift-.) -- instantly silence everything"
+          className="px-2 hover:opacity-50 hover:text-red-400"
+        >
+          <ExclamationTriangleIcon className="w-4 h-4" />
+        </button>
+      )}
+      {!isEmbedded && <Toolbox context={context} />}
       <button
         onClick={handleEvaluate}
         title="update"
@@ -143,6 +235,7 @@ function MainMenu({ context, isEmbedded = false, className }) {
       >
         {!isEmbedded && <span>update</span>}
       </button>
+      {!isEmbedded && <TempoControl context={context} />}
       {!isEmbedded && (
         <button
           title="share"
@@ -161,43 +254,29 @@ function MainMenu({ context, isEmbedded = false, className }) {
           <span>learn</span>
         </a>
       )}
+      {!isEmbedded && (
+        <button
+          title="keyboard shortcuts (?)"
+          onClick={toggleShortcuts}
+          className={cx('hover:opacity-50 flex items-center space-x-1', !isEmbedded ? 'p-2' : 'px-2')}
+        >
+          <span>?</span>
+        </button>
+      )}
     </div>
-  );
-}
-
-function PanelCloseButton() {
-  const { isPanelOpen } = useSettings();
-  return (
-    isPanelOpen && (
-      <button
-        onClick={() => setIsPanelOpened(false)}
-        className={cx('px-2 py-0 text-foreground hover:opacity-50')}
-        aria-label="Close Menu"
-      >
-        <XMarkIcon className="w-6 h-6" />
-      </button>
-    )
   );
 }
 
 export function BottomPanel({ context }) {
   const { isPanelOpen, activeFooter: tab } = useSettings();
+  if (!isPanelOpen) {
+    return null;
+  }
   return (
-    <PanelNav
-      className={cx(
-        isPanelOpen ? `min-h-[360px] max-h-[360px]` : 'min-h-10 max-h-10',
-        'overflow-hidden flex flex-col relative',
-      )}
-    >
-      <div className="flex justify-between min-h-10 max-h-10 grid-cols-2 items-center border-t border-muted">
-        <PanelCloseButton />
-        <Tabs setTab={setTab} tab={tab} className={cx(isPanelOpen && 'border-l border-muted')} />
+    <PanelNav className="min-h-[360px] max-h-[360px] overflow-hidden flex flex-col relative border-t border-muted">
+      <div className="w-full h-full overflow-auto">
+        <PanelContent context={context} tab={tab} />
       </div>
-      {isPanelOpen && (
-        <div className="w-full h-full overflow-auto border-t border-muted">
-          <PanelContent context={context} tab={tab} />
-        </div>
-      )}
     </PanelNav>
   );
 }
@@ -206,24 +285,15 @@ export function RightPanel({ context }) {
   const settings = useSettings();
   const { activeFooter: tab, isPanelOpen } = settings;
   if (!isPanelOpen) {
-    return;
+    return null;
   }
   return (
     <PanelNav
       settings={settings}
-      className={cx(
-        'border-l border-muted shrink-0 h-full overflow-hidden',
-        isPanelOpen ? `min-w-[min(600px,100vw)] max-w-[min(600px,80vw)]` : 'min-w-12 max-w-12',
-      )}
+      className="border-l border-muted shrink-0 h-full overflow-hidden min-w-[min(420px,100vw)] max-w-[min(420px,80vw)]"
     >
-      <div className={cx('flex flex-col h-full')}>
-        <div className="flex justify-between w-full overflow-hidden border-b border-muted min-h-10 max-h-10">
-          <PanelCloseButton />
-          <Tabs setTab={setTab} tab={tab} className="border-l border-muted" />
-        </div>
-        <div className="overflow-auto h-full">
-          <PanelContent context={context} tab={tab} />
-        </div>
+      <div className="overflow-auto h-full">
+        <PanelContent context={context} tab={tab} />
       </div>
     </PanelNav>
   );
@@ -241,6 +311,11 @@ const tabNames = {
 if (TAURI) {
   tabNames.files = 'files';
 }
+
+// Only these stay as clickable tabs in the panel itself; the rest (welcome,
+// patterns, sounds, export, and -- inside Tauri -- files) are reached via
+// the in-app sidebar instead (see AppSidebar.jsx), to keep this row from
+// being crowded.
 
 function PanelNav({ children, className, ...props }) {
   const settings = useSettings();
@@ -263,8 +338,6 @@ function PanelNav({ children, className, ...props }) {
 function PanelContent({ context, tab }) {
   useLogger();
   switch (tab) {
-    case tabNames.patterns:
-      return <PatternsTab context={context} />;
     case tabNames.console:
       return <ConsoleTab />;
     case tabNames.sounds:
@@ -282,37 +355,6 @@ function PanelContent({ context, tab }) {
   }
 }
 
-function PanelTab({ label, isSelected, onClick }) {
-  return (
-    <>
-      <button
-        onClick={onClick}
-        className={cx(
-          'h-10 px-2 text-sm border-t-2 border-t-transparent text-foreground cursor-pointer hover:opacity-50 flex items-center space-x-1 border-b-2',
-          isSelected ? 'border-foreground' : 'border-transparent',
-        )}
-      >
-        {label}
-      </button>
-    </>
-  );
-}
-function Tabs({ className }) {
-  const { isPanelOpen, activeFooter: tab } = useSettings();
-  return (
-    <div
-      className={cx(
-        'px-2 w-full flex select-none max-w-full h-10 max-h-10 min-h-10 overflow-auto items-center',
-        className,
-      )}
-    >
-      {Object.keys(tabNames).map((key) => {
-        const val = tabNames[key];
-        return <PanelTab key={key} isSelected={tab === val && isPanelOpen} label={key} onClick={() => setTab(val)} />;
-      })}
-    </div>
-  );
-}
 
 export function PanelToggle({ isEmbedded, isZen }) {
   const { panelPosition, isPanelOpen } = useSettings();

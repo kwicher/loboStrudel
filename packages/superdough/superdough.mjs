@@ -349,6 +349,33 @@ export function connectToDestination(input, channels) {
   controller.output.connectToDestination(input, channels);
 }
 
+export function panicAudio() {
+  getSuperdoughAudioController().panic();
+}
+
+// Master-output level meter support -- a tap on the same node that feeds
+// audioContext.destination (see SuperdoughOutput.getMasterAnalyser), not
+// tied to any particular orbit or voice, so it works regardless of which
+// pattern/orbit is actually making sound.
+let masterAnalyserData;
+export function getMasterAnalyser(fftSize, smoothingTimeConstant) {
+  return getSuperdoughAudioController().getMasterAnalyser(fftSize, smoothingTimeConstant);
+}
+
+export function getMasterAnalyzerData(type = 'time') {
+  const node = getMasterAnalyser();
+  if (!node) return new Float32Array(0);
+  if (!masterAnalyserData || masterAnalyserData.length !== node.frequencyBinCount) {
+    masterAnalyserData = new Float32Array(node.frequencyBinCount);
+  }
+  if (type === 'frequency') {
+    node.getFloatFrequencyData(masterAnalyserData);
+  } else {
+    node.getFloatTimeDomainData(masterAnalyserData);
+  }
+  return masterAnalyserData;
+}
+
 function getPhaser(begin, end, frequency = 1, depth = 0.5, centerFrequency = 1000, sweep = 2000) {
   const ac = getAudioContext();
   const lfo = getLfo(ac, { frequency, depth: sweep * 2, begin, end });

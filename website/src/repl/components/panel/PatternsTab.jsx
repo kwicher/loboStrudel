@@ -19,6 +19,7 @@ import { useState } from 'react';
 import { useDebounce } from '../usedebounce.jsx';
 import cx from '@src/cx.mjs';
 import { Textbox } from '@src/repl/components/panel/SettingsTab.jsx';
+import { PanelHeader } from './PanelHeader.jsx';
 
 export function PatternLabel({ pattern } /* : { pattern: Tables<'code'> } */) {
   const meta = useMemo(() => getMetadata(pattern.code), [pattern]);
@@ -37,18 +38,24 @@ export function PatternLabel({ pattern } /* : { pattern: Tables<'code'> } */) {
   return <>{`${title} by ${author.slice(0, 100)}`.slice(0, 60)}</>;
 }
 
+// Patterns render as a wrapping row of name tabs (mirrors the app's old
+// top-level PanelTab underline style) instead of a single-column list of
+// links, so the pattern's name sits at the top of its tab the way a browser
+// tab does, and many patterns wrap across multiple rows rather than forcing
+// one long vertical scroll.
 function PatternButton({ showOutline, onClick, pattern, showHiglight }) {
   return (
-    <a
+    <button
+      type="button"
+      onClick={onClick}
       className={cx(
-        'mr-4 hover:opacity-50 cursor-pointer block',
-        showOutline && 'outline outline-1',
+        'max-w-[200px] px-2 py-1 text-sm text-left truncate border-b-2 cursor-pointer hover:opacity-70',
+        showOutline ? 'border-foreground' : 'border-transparent',
         showHiglight && 'ring-selection',
       )}
-      onClick={onClick}
     >
       <PatternLabel pattern={pattern} />
-    </a>
+    </button>
   );
 }
 
@@ -56,7 +63,7 @@ function PatternButtons({ patterns, activePattern, onClick, started }) {
   const viewingPatternData = useViewingPatternData();
   const viewingPatternID = viewingPatternData.id;
   return (
-    <div className="p-2">
+    <div className="p-2 flex flex-wrap content-start gap-x-1 gap-y-1">
       {Object.values(patterns)
         .reverse()
         .map((pattern) => {
@@ -123,8 +130,14 @@ export function PatternsTab({ context }) {
   }, [search, userPatterns]);
 
   const importRef = useRef();
+
+  // Native file open/save now lives in the in-app sidebar (see
+  // AppSidebar.jsx), which calls openPatternFile()/savePatternFile()
+  // directly -- no menu events to listen for here anymore.
+
   return (
     <div className="w-full h-full text-foreground flex flex-col overflow-hidden">
+      <PanelHeader title="Patterns" />
       <Textbox className="w-full border-0" placeholder="Search..." value={search} onChange={setSearch} />
       <div className="px-2 shrink-0 h-8 space-x-4 flex max-w-full overflow-x-auto border-y border-muted">
         <ActionButton

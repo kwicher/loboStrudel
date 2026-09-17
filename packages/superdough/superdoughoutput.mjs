@@ -132,6 +132,20 @@ export class Orbit {
 export class SuperdoughOutput {
   channelMerger;
   destinationGain;
+  // A gentle brake, not a mastering tool: a high-threshold, fast, hard-knee
+  // limiter sitting in series right before the speakers, only there to
+  // catch the accidental clip (a runaway filter resonance, a stacked
+  // buildup) rather than to shape the sound. Threshold is intentionally
+  // close to 0dB so it stays out of the way until something is actually
+  // about to clip.
+  limiterNode;
+  // Lazily-created master-bus tap for a level meter -- a plain extra
+  // .connect() off destinationGain, the same node that already feeds
+  // audioContext.destination, so it never changes what's actually heard.
+  // Kept as an instance field (not recreated in reset()) so it survives
+  // reset() rebuilding destinationGain: initializeAudio() below reconnects
+  // it to the fresh node whenever one already exists.
+  analyserNode;
 
   constructor(audioContext) {
     this.audioContext = audioContext;
@@ -144,8 +158,43 @@ export class SuperdoughOutput {
     this.audioContext.destination.channelCount = maxChannelCount;
     this.channelMerger = new ChannelMergerNode(audioContext, { numberOfInputs: audioContext.destination.channelCount });
     this.destinationGain = new GainNode(audioContext);
+    this.limiterNode = new DynamicsCompressorNode(audioContext, {
+      threshold: -1,
+      knee: 1,
+      ratio: 20,
+      attack: 0.001,
+      release: 0.1,
+    });
     this.channelMerger.connect(this.destinationGain);
-    this.destinationGain.connect(audioContext.destination);
+    this.destinationGain.connect(this.limiterNode);
+    this.limiterNode.connect(audioContext.destination);
+    if (this.analyserNode) {
+      this.destinationGain.connect(this.analyserNode);
+    }
+  }
+
+  // Panic: an immediate, very short dip of the master gain to silence
+  // whatever's currently sounding (including notes already triggered with
+  // long releases, which stopping the scheduler alone can't reach), then
+  // straight back up so playback keeps working afterwards. This does NOT
+  // touch the limiter or the scheduler -- callers combine it with actually
+  // stopping playback (see useReplContext.jsx's handlePanic).
+  panic() {
+    if (!this.destinationGain) return;
+    const now = this.audioContext.currentTime;
+    const gain = this.destinationGain.gain;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.linearRampToValueAtTime(0, now + 0.015);
+    gain.linearRampToValueAtTime(1, now + 0.08);
+  }
+
+  getMasterAnalyser(fftSize = 1024, smoothingTimeConstant = 0.6) {
+    if (!this.analyserNode || this.analyserNode.context !== this.audioContext) {
+      this.analyserNode = new AnalyserNode(this.audioContext, { fftSize, smoothingTimeConstant });
+      this.destinationGain?.connect(this.analyserNode);
+    }
+    return this.analyserNode;
   }
 
   reset() {
@@ -155,8 +204,10 @@ export class SuperdoughOutput {
   disconnect() {
     this.channelMerger.disconnect();
     this.destinationGain.disconnect();
+    this.limiterNode?.disconnect();
     this.destinationGain = null;
     this.channelMerger = null;
+    this.limiterNode = null;
   }
   connectToDestination = (input, channels = [0, 1]) => {
     //This upmix can be removed if correct channel counts are set throughout the app,
@@ -183,6 +234,14 @@ export class SuperdoughAudioController {
   constructor(audioContext) {
     this.audioContext = audioContext;
     this.output = new SuperdoughOutput(audioContext);
+  }
+
+  getMasterAnalyser(fftSize, smoothingTimeConstant) {
+    return this.output.getMasterAnalyser(fftSize, smoothingTimeConstant);
+  }
+
+  panic() {
+    this.output.panic();
   }
 
   reset() {

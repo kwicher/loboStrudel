@@ -204,3 +204,24 @@
 
 .autocomplete-info-tooltip::-webkit-scrollbar-thumb:hover {
 }
+
+/* Grid view (GridTab.jsx): a vertical line sweeping left-to-right across
+   the currently-playing section box, showing cycle progress within that
+   section. Pure CSS so it doesn't need a render loop -- its duration is
+   set inline per section and the element is remounted (fresh React key)
+   every time a section is (re)armed, which restarts the animation at 0. */
+@keyframes gridProgress {
+  from { left: 0%; }
+  to { left: 100%; }
+}
+.grid-progress-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #89ddff;
+  pointer-events: none;
+  animation-name: gridProgress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}

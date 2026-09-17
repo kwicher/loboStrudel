@@ -19,3 +19,16 @@ catalog:
   "@codemirror/view": "^6.36.2"
   "@codemirror/autocomplete": "^6.18.4"
   "@codemirror/search": "^6.5.8"
+
+allowBuilds:
+  # esbuild and sharp run native postinstall build steps that vite/astro
+  # actually need (bundling, image processing) -> allowed.
+  esbuild: true
+  sharp: true
+  # not needed for the desktop app / the two features added here:
+  # serial MIDI hardware bridge, monorepo task runner, Haskell pattern
+  # support. Flip to true if a build step complains about one of these.
+  '@serialport/bindings-cpp': false
+  nx: false
+  tree-sitter: false
+  tree-sitter-haskell: false

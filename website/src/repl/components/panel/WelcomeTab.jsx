@@ -1,4 +1,5 @@
 import { useSettings } from '@src/settings.mjs';
+import { PanelHeader } from './PanelHeader.jsx';
 
 const { BASE_URL } = import.meta.env;
 const baseNoTrailing = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
@@ -6,7 +7,9 @@ const baseNoTrailing = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL
 export function WelcomeTab({ context }) {
   const { fontFamily } = useSettings();
   return (
-    <div className="prose dark:prose-invert min-w-full py-4 font-sans px-4 text-sm" style={{ fontFamily }}>
+    <div className="flex flex-col h-full overflow-hidden">
+      <PanelHeader title="Welcome" />
+      <div className="prose dark:prose-invert min-w-full py-4 font-sans px-4 text-sm overflow-auto" style={{ fontFamily }}>
       <h3>welcome</h3>
       <p>
         You have found <span className="underline">strudel</span>, a new live coding platform to write dynamic music
@@ -53,6 +56,7 @@ export function WelcomeTab({ context }) {
         </a>{' '}
         to ensure ongoing development 💖
       </p>
+      </div>
     </div>
   );
 }

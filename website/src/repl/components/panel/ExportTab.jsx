@@ -2,6 +2,7 @@ import cx from '@src/cx.mjs';
 import { useState } from 'react';
 import { Textbox } from '@src/repl/components/panel/SettingsTab';
 import { getAudioContext } from '@strudel/webaudio';
+import { PanelHeader } from './PanelHeader.jsx';
 
 function Checkbox({ label, value, onChange, disabled = false }) {
   return (
@@ -44,8 +45,9 @@ export default function ExportTab(Props) {
   };
 
   return (
-    <>
-      <div className="text-foreground w-full space-y-4 p-4">
+    <div className="h-full flex flex-col">
+      <PanelHeader title="Export" subtitle="render pattern to WAV" />
+      <div className="text-foreground w-full space-y-4 p-4 overflow-auto">
         <FormItem label="File name" disabled={exporting}>
           <Textbox
             onBlur={(e) => {
@@ -189,6 +191,6 @@ export default function ExportTab(Props) {
         id="exportProgressModal"
         className="text-md bg-background text-foreground rounded-lg backdrop:bg-background backdrop:opacity-25"
       />
-    </>
+    </div>
   );
 }
