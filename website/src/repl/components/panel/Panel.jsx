@@ -7,6 +7,7 @@ import cx from '@src/cx.mjs';
 import { StrudelIcon } from '@src/repl/components/icons/StrudelIcon';
 import { useSettings, setIsZen, setIsPanelOpened } from '../../../settings.mjs';
 import { useGridPlaying } from '../../patternGrid.mjs';
+import { setGlobalCps } from '../../gridRepl.mjs';
 import '../../Repl.css';
 import { useLogger } from '../useLogger';
 import { ConsoleTab } from './ConsoleTab';
@@ -154,7 +155,11 @@ function TempoControl({ context }) {
   const commit = (rawValue) => {
     const bpm = parseFloat(rawValue);
     if (!isNaN(bpm) && bpm > 0) {
-      context.editorRef?.current?.repl?.setCps(bpm / 60);
+      // Keeps the grid's independent repl (gridRepl.mjs) in step with the
+      // main editor's -- "one shared tempo across the app" is still the
+      // product intent (see patternGrid.mjs's header comment), just done
+      // by explicit sync now instead of both sides sharing one scheduler.
+      setGlobalCps(bpm / 60, context.editorRef?.current?.repl);
       setLiveBpm(Math.round(bpm * 10) / 10);
     }
     setDraft(null);
@@ -205,25 +210,20 @@ function TempoControl({ context }) {
 function MainMenu({ context, isEmbedded = false, className }) {
   const { started, pending, isDirty, activeCode, handleTogglePlay, handleEvaluate, handleShare, handlePanic } = context;
   const { isCSSAnimationDisabled } = useSettings();
-  // The grid and the main single-pattern transport share one editor and
-  // scheduler (see patternGrid.mjs's header comment) -- letting both
-  // drive it at once is exactly the "playback gets mixed up" confusion
-  // that was reported. While the grid is playing, play/stop and update
-  // go inert; per explicit request, playback is then "fully controlled
-  // via grid tools." Panic and tempo stay live -- panic should always be
-  // able to silence everything in an emergency, and tempo is genuinely
-  // shared (the grid's own tempo control does the same setCps() call).
+  // The grid plays through its own independent repl instance now
+  // (gridRepl.mjs), decoupled from the main editor's -- so simultaneous
+  // main-editor + grid playback is no longer the "playback gets mixed up"
+  // hazard it used to be (their webaudio output just mixes together via
+  // the shared AudioContext). The header transport used to go inert
+  // while the grid played; that lock is gone. gridPlaying is kept only to
+  // label the play button "grid" while it's the grid actually sounding.
   const gridPlaying = useGridPlaying();
   return (
     <div className={cx('flex text-sm max-w-full shrink-0 overflow-hidden text-foreground px-2 h-10', className)}>
       <button
         onClick={handleTogglePlay}
-        disabled={gridPlaying}
-        title={gridPlaying ? 'the grid is controlling playback -- stop the grid to use this' : started ? 'stop' : 'play'}
-        className={cx(
-          'px-2',
-          gridPlaying ? 'opacity-30 cursor-default' : cx('hover:opacity-50', !started && !isCSSAnimationDisabled && 'animate-pulse'),
-        )}
+        title={started ? 'stop' : 'play'}
+        className={cx('px-2 hover:opacity-50', !started && !isCSSAnimationDisabled && 'animate-pulse')}
       >
         <span className={cx('flex items-center space-x-2')}>
           {started ? <StopIcon className="w-5 h-5" /> : <PlayIcon className="w-5 h-5" />}
@@ -242,12 +242,8 @@ function MainMenu({ context, isEmbedded = false, className }) {
       )}
       <button
         onClick={handleEvaluate}
-        disabled={gridPlaying}
-        title={gridPlaying ? 'the grid is controlling playback -- stop the grid to use this' : 'update'}
-        className={cx(
-          'flex items-center space-x-1 px-2',
-          gridPlaying ? 'opacity-30 cursor-default' : !isDirty || !activeCode ? 'opacity-50' : 'hover:opacity-50',
-        )}
+        title="update"
+        className={cx('flex items-center space-x-1 px-2', !isDirty || !activeCode ? 'opacity-50' : 'hover:opacity-50')}
       >
         {!isEmbedded && <span>update</span>}
       </button>

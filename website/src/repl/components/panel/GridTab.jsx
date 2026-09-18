@@ -24,10 +24,11 @@ import {
   TrashIcon,
 } from '@heroicons/react/16/solid';
 import { GridToolsPanel } from './GridToolsPanel.jsx';
+import { getGridRepl } from '../../gridRepl.mjs';
 import { ensureVisualizerHook, openVisualizerPopup } from '../../gridVisualizer.mjs';
 import cx from '@src/cx.mjs';
 import { useSettings } from '../../../settings.mjs';
-import { getViewingPatternData, useViewingPatternData, userPattern } from '../../../user_pattern_utils.mjs';
+import { useViewingPatternData, userPattern } from '../../../user_pattern_utils.mjs';
 import { patternTitle } from './PatternTabs.jsx';
 import { setTitleOverride, useTitleOverrides } from '../../patternTitles.mjs';
 import { openPatternTab } from '../../openPatternTabs.mjs';
@@ -43,7 +44,6 @@ import {
   moveEntry,
   removeFromTrack,
   removeTrack,
-  setGridEvaluating,
   setGridPlaying,
   setTrackEntryCycles,
   toggleEntryEnabled,
@@ -192,21 +192,11 @@ export function GridTab({ context }) {
 
   const evaluateCombined = async () => {
     const code = buildCombinedCode(getGridTracks(), activeIndexesRef.current, userPatterns, visualizeRef.current);
-    const editor = context.editorRef?.current;
-    if (!editor) return;
-    editor.setCode(code);
-    // Flagged so useReplContext.jsx's afterEval knows this evaluate is the
-    // grid's own ephemeral combined buffer, not the user editing whatever
-    // pattern tab happens to be open -- see patternGrid.mjs's
-    // isGridEvaluating() comment for the bug this prevents (this used to
-    // silently overwrite the viewed pattern's saved code on every track
-    // advance/mute/stop).
-    setGridEvaluating(true);
-    try {
-      await editor.evaluate();
-    } finally {
-      setGridEvaluating(false);
-    }
+    // Its own repl instance now (gridRepl.mjs) -- no shared editor buffer
+    // to hijack, so there's no flag needed to tell "the grid's ephemeral
+    // combined buffer" apart from "the user editing the pattern they're
+    // viewing" (see gridRepl.mjs's header comment for the full context).
+    await getGridRepl().evaluate(code);
   };
 
   const scheduleEvaluate = () => {
@@ -241,11 +231,7 @@ export function GridTab({ context }) {
     setActiveIndexes({});
     setSectionAnim({});
     setGridPlaying(false);
-    const editor = context.editorRef?.current;
-    if (editor) {
-      editor.stop();
-      editor.setCode(getViewingPatternData()?.code ?? '');
-    }
+    getGridRepl().stop();
   };
   const stopGrid = haltGrid;
 
@@ -270,7 +256,7 @@ export function GridTab({ context }) {
     if (!track) return;
     const entry = track.entries[index];
     if (!entry) return;
-    const cps = context.editorRef?.current?.repl?.scheduler?.cps || 0.5;
+    const cps = getGridRepl().scheduler.cps || 0.5;
     const durationMs = Math.max(500, (entry.cycles / cps) * 1000);
     clearTrackTimer(trackId);
     timersRef.current[trackId] = setTimeout(() => advanceTrack(trackId, index), durationMs);

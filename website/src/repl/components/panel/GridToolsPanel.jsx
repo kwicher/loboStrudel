@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from 'react';
 import cx from '@src/cx.mjs';
 import { setVisualizerSetting, useVisualizerSettings } from '../../gridVisualizer.mjs';
 import { closeToolsPopup, useToolsPopupOpen } from '../../patternGrid.mjs';
+import { getGridRepl, setGlobalCps } from '../../gridRepl.mjs';
 import { FloatingPopup } from './FloatingPopup.jsx';
 
 function insertSnippet(context, snippet) {
@@ -56,14 +57,15 @@ function InsertRow({ snippet, onInsert }) {
 
 // Live tempo control: nudge cps up/down in small fixed steps, or tap out a
 // beat to set it directly -- editing cps by retyping `setcps(...)` in the
-// code mid-performance breaks flow, so this calls the same repl.setCps()
-// that would do from buttons instead. This is separate from (and, unlike)
-// the app-wide bpm box in the top header (Panel.jsx's own TempoControl,
+// code mid-performance breaks flow, so this calls setGlobalCps() (see
+// gridRepl.mjs) to nudge both the grid's own repl and the main editor's,
+// keeping the "one shared tempo" intent intact even though they're two
+// separate repl instances now. This is separate from (and, unlike) the
+// app-wide bpm box in the top header (Panel.jsx's own TempoControl,
 // pre-existing, untouched by any of this) -- that one's a precise typed
 // value, this one's a fast nudge/tap you don't have to look away from the
-// grid for. cps is a plain mutable number on the scheduler (see
-// patternGrid.mjs's header comment), not reactive, so this polls it
-// rather than subscribing to anything.
+// grid for. cps is a plain mutable number on the scheduler, not reactive,
+// so this polls it rather than subscribing to anything.
 const BEATS_PER_CYCLE = 4;
 const CPS_NUDGE_STEP = 0.01;
 const TAP_RESET_MS = 2000;
@@ -75,7 +77,7 @@ function TempoControl({ context }) {
 
   useEffect(() => {
     const id = setInterval(() => {
-      const live = context.editorRef?.current?.repl?.scheduler?.cps;
+      const live = getGridRepl().scheduler.cps;
       if (live != null) setCpsDisplay(live);
     }, 250);
     return () => clearInterval(id);
@@ -84,7 +86,7 @@ function TempoControl({ context }) {
 
   const applyCps = (next) => {
     const clamped = Math.max(0.05, Math.min(10, next));
-    context.editorRef?.current?.repl?.setCps(clamped);
+    setGlobalCps(clamped, context.editorRef?.current?.repl);
     setCpsDisplay(clamped);
   };
 

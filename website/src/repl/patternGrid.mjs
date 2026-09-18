@@ -6,21 +6,23 @@
 // like openPatternTabs.mjs: an arrangement you're building for *this*
 // session, not a saved document.
 //
-// Playback model, and why it's honest about its limits: Strudel has one
-// scheduler (the StrudelMirror instance behind editorRef), not one per
-// track, and cps is shared across the whole app -- exactly what was
-// asked for. So "several tracks playing at once" is built by concatenating
-// every unmuted track's *currently active* section code into one buffer
-// and evaluating that as a single program, the same thing multiple
-// top-level `$:` blocks in one pattern already do. Each track counts down
-// its own section length independently (against the shared cps) and,
-// when it elapses, swaps in its next section and re-evaluates the
-// combined buffer -- a live hot-swap exactly like hitting Ctrl-Enter, so
-// the clock never resets or glitches. Because it's one shared buffer, a
-// section's own setcps()/samples() calls will affect the whole mix even
-// though only one track "owns" that moment -- there's still no audio
-// crossfade between sections, same honest limitation the old Set mode
-// had. GridTab.jsx's scheduleEvaluate() coalesces multiple same-tick
+// Playback model, and why it's honest about its limits: the grid plays
+// through its own independent repl instance (gridRepl.mjs), separate from
+// the main editor's -- so "several tracks playing at once, under one
+// shared tempo" is built by concatenating every unmuted track's
+// *currently active* section code into one buffer and evaluating that as
+// a single program on the grid's repl, the same thing multiple top-level
+// `$:` blocks in one pattern already do. "One shared tempo" is now a
+// deliberate design choice (see gridRepl.mjs's setGlobalCps) rather than
+// an accident of sharing one scheduler. Each track counts down its own
+// section length independently (against the shared cps) and, when it
+// elapses, swaps in its next section and re-evaluates the combined
+// buffer -- a live hot-swap exactly like hitting Ctrl-Enter, so the clock
+// never resets or glitches. Because it's one shared buffer, a section's
+// own setcps()/samples() calls will affect the whole mix even though only
+// one track "owns" that moment -- there's still no audio crossfade
+// between sections, same honest limitation the old Set mode had.
+// GridTab.jsx's scheduleEvaluate() coalesces multiple same-tick
 // re-evaluates into one (fewer redundant hot-swaps when several tracks
 // advance together) but that's a scheduling optimization, not a fix for
 // the lack of crossfade itself -- a real fix would need per-track gain
@@ -222,41 +224,16 @@ export function clearGrid() {
   setTracks([]);
 }
 
-// Set around every GridTab evaluate (GridTab.jsx's evaluateCombined) so
-// useReplContext.jsx's afterEval can tell "this evaluate came from the
-// grid's ephemeral combined buffer" apart from "this evaluate came from
-// the user editing/running the pattern they're actually viewing" -- the
-// two share the exact same editor/evaluate pipeline, and without this
-// flag afterEval unconditionally persists whatever it just evaluated as
-// the *viewed* pattern's new saved code. That silently overwrote
-// whichever tab happened to be open with the grid's combined buffer on
-// every track advance, mute toggle, or stop (stopping evaluates
-// "silence") -- a real bug, not the intentional kind of non-destructive
-// ephemeral-buffer trick documented elsewhere in this file and in
-// GridTab.jsx/Toolbox.jsx (see patternTitles.mjs's header comment for the
-// bug those techniques were built to avoid; this is that same class of
-// bug, just via a different path). A plain module-level flag is enough:
-// GridTab's evaluate calls are synchronous with the afterEval callback
-// they trigger (see StrudelMirror's evaluate()), so there's no window for
-// a real, non-grid evaluate to race in between.
-let gridEvaluating = false;
-export function setGridEvaluating(value) {
-  gridEvaluating = value;
-}
-export function isGridEvaluating() {
-  return gridEvaluating;
-}
-
 // Whether the grid is actively playing -- shared (not local to GridTab)
-// so the main app header (Panel.jsx) can disable its own play/stop/update
-// transport while the grid owns playback. The two used to be able to run
-// at once and fight over the same shared editor/scheduler (see this
-// file's header comment for why there's only one); per explicit request
-// ("the main playback loop... should be inactivated... fully controlled
-// via grid tools") the header transport now just goes inert instead. A
-// plain in-memory atom, not sessionStorage-backed -- there's no reason
-// "was the grid playing" should survive a reload, unlike the panel-open
-// toggles above.
+// so the main app header (Panel.jsx) and GridToolsPanel.jsx's tempo
+// control can see it too. The grid now plays through its own independent
+// repl instance (gridRepl.mjs), decoupled from the shared editor/
+// scheduler this file's header comment used to describe as the reason
+// there's only one -- so this atom is purely informational now (driving
+// the "grid" label on the header's play button), not a mutual-exclusion
+// lock. A plain in-memory atom, not sessionStorage-backed -- there's no
+// reason "was the grid playing" should survive a reload, unlike the
+// panel-open toggles above.
 const $gridPlaying = atom(false);
 export const useGridPlaying = () => useStore($gridPlaying);
 export const setGridPlaying = (value) => $gridPlaying.set(value);
